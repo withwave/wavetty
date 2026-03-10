@@ -2053,14 +2053,43 @@ pub fn selectionString(self: *Surface, alloc: Allocator) !?[:0]const u8 {
 /// Returns the pwd of the terminal, if any. This is always copied because
 /// the pwd can change at any point from termio. If we are calling from the IO
 /// thread you should just check the terminal directly.
+///
+/// If the terminal has no pwd reported via OSC 7 (e.g., shell integration
+/// is not available), this falls back to reading the child process's
+/// current working directory directly from the OS.
 pub fn pwd(
     self: *const Surface,
     alloc: Allocator,
 ) Allocator.Error!?[]const u8 {
     self.renderer_state.mutex.lock();
     defer self.renderer_state.mutex.unlock();
-    const terminal_pwd = self.io.terminal.getPwd() orelse return null;
-    return try alloc.dupe(u8, terminal_pwd);
+
+    // If the pwd was set by OSC 7 (shell integration), it's actively
+    // tracked and always up-to-date. Use it directly.
+    if (self.io.terminal.pwd_from_osc7) {
+        if (self.io.terminal.getPwd()) |terminal_pwd| {
+            return try alloc.dupe(u8, terminal_pwd);
+        }
+    }
+
+    // No OSC 7 shell integration. Try reading the foreground process's
+    // current working directory directly from the OS. We use tcgetpgrp()
+    // on the PTY master fd to find the actual foreground process (e.g.,
+    // the shell), not the initial child (e.g., /usr/bin/login).
+    if (self.io.terminal.pty_fd) |fd| {
+        if (internal_os.getForegroundPid(fd)) |fg_pid| {
+            if (internal_os.getProcessCwd(alloc, fg_pid)) |cwd| {
+                return cwd;
+            }
+        }
+    }
+
+    // Final fallback: use whatever pwd we have (e.g., initial CWD).
+    if (self.io.terminal.getPwd()) |terminal_pwd| {
+        return try alloc.dupe(u8, terminal_pwd);
+    }
+
+    return null;
 }
 
 /// Resolves a relative file path to an absolute path using the terminal's pwd.

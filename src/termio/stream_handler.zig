@@ -1189,7 +1189,7 @@ pub const StreamHandler = struct {
         const path = try uri.path.toRawMaybeAlloc(stack_alloc.get());
 
         log.debug("terminal pwd: {s}", .{path});
-        try self.terminal.setPwd(path);
+        try self.terminal.setPwdFromOsc7(path);
 
         // Report it to the surface. If creating our write request fails
         // then we just ignore it.
