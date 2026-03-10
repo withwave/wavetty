@@ -2150,6 +2150,28 @@ pub fn pwd(
 ) Allocator.Error!?[]const u8 {
     self.renderer_state.mutex.lockUncancelable(global.io());
     defer self.renderer_state.mutex.unlock(global.io());
+
+    // Wavetty: if the pwd was set by OSC 7 (shell integration), it's actively
+    // tracked and always up-to-date. Use it directly.
+    if (self.io.terminal.pwd_from_osc7) {
+        if (self.io.terminal.getPwd()) |terminal_pwd| {
+            return try alloc.dupe(u8, terminal_pwd);
+        }
+    }
+
+    // Wavetty: no OSC 7 shell integration. Read the foreground process's
+    // current working directory from the OS. tcgetpgrp() on the PTY master fd
+    // finds the actual foreground process (e.g. the shell), not the initial
+    // child (e.g. /usr/bin/login).
+    if (self.io.terminal.pty_fd) |fd| {
+        if (internal_os.getForegroundPid(fd)) |fg_pid| {
+            if (internal_os.getProcessCwd(alloc, fg_pid)) |cwd| {
+                return cwd;
+            }
+        }
+    }
+
+    // Final fallback: use whatever pwd we have (e.g., initial CWD).
     const terminal_pwd = self.io.terminal.getPwd() orelse return null;
     return try alloc.dupe(u8, terminal_pwd);
 }

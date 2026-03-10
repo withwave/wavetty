@@ -72,6 +72,17 @@ pwd: std.ArrayList(u8),
 /// The title of the terminal as set by escape sequences (e.g. OSC 0/2).
 title: std.ArrayList(u8),
 
+/// Wavetty: whether the pwd was set via OSC 7 (shell integration) as opposed
+/// to being set from the initial working directory. When true, the pwd is
+/// actively tracked by the shell and is up-to-date. When false, the pwd may be
+/// stale (e.g., after the user runs `cd`).
+pwd_from_osc7: bool = false,
+
+/// Wavetty: the PTY master fd for this terminal. Used to query the foreground
+/// process group and read its CWD from the OS when shell integration (OSC 7)
+/// is not available.
+pty_fd: ?std.posix.fd_t = null,
+
 /// The color state for this terminal.
 colors: Colors,
 
@@ -4656,6 +4667,20 @@ pub fn setPwd(self: *Terminal, pwd: []const u8) !void {
     self.pwd.items.len = capacity;
     std.mem.copyForwards(u8, self.pwd.items[0..pwd.len], pwd);
     self.pwd.items[pwd.len] = 0;
+}
+
+/// Wavetty: set the pwd from OSC 7 shell integration. This marks the pwd as
+/// actively tracked by the shell.
+pub fn setPwdFromOsc7(self: *Terminal, pwd: []const u8) !void {
+    try self.setPwd(pwd);
+    self.pwd_from_osc7 = true;
+}
+
+/// Wavetty: set the PTY master fd for this terminal. This is used to query the
+/// foreground process and read its CWD from the OS when shell integration
+/// (OSC 7) is not available.
+pub fn setPtyFd(self: *Terminal, fd: std.posix.fd_t) void {
+    self.pty_fd = fd;
 }
 
 /// Returns the pwd for the terminal, if any. The memory is owned by the

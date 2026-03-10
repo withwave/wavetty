@@ -16,6 +16,7 @@ const pipepkg = @import("pipe.zig");
 const resourcesdir = @import("resourcesdir.zig");
 const systemd = @import("systemd.zig");
 const kernel_info = @import("kernel_info.zig");
+const processpkg = @import("process.zig");
 
 // Namespaces
 pub const cgroup = @import("cgroup.zig");
@@ -57,6 +58,8 @@ pub const ResourcesDir = resourcesdir.ResourcesDir;
 pub const ShellEscapeWriter = shell.ShellEscapeWriter;
 pub const getKernelInfo = kernel_info.getKernelInfo;
 pub const getConfigEditCommand = edit.getConfigEditCommand;
+pub const getProcessCwd = processpkg.getCwd;
+pub const getForegroundPid = processpkg.getForegroundPid;
 
 test {
     _ = file;
