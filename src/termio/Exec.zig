@@ -154,6 +154,16 @@ pub fn threadEnter(
         .termios_timer = termios_timer,
     } };
 
+    // Store the PTY master fd in the terminal for OS-level CWD fallback.
+    // This enables working directory inheritance even when shell
+    // integration (OSC 7) is not available. We use tcgetpgrp() on this
+    // fd to find the foreground process and read its CWD.
+    {
+        io.renderer_state.mutex.lock();
+        defer io.renderer_state.mutex.unlock();
+        io.terminal.setPtyFd(pty_fds.read);
+    }
+
     // Start our process watcher. If we have an xev.Process use it.
     if (process) |*p| p.wait(
         td.loop,

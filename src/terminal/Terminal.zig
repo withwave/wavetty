@@ -68,6 +68,17 @@ pwd: std.ArrayList(u8),
 /// The title of the terminal as set by escape sequences (e.g. OSC 0/2).
 title: std.ArrayList(u8),
 
+/// Whether the pwd was set via OSC 7 (shell integration) as opposed
+/// to being set from the initial working directory. When true, the
+/// pwd is actively tracked by the shell and is up-to-date. When false,
+/// the pwd may be stale (e.g., after the user runs `cd`).
+pwd_from_osc7: bool = false,
+
+/// The PTY master fd for this terminal. Used to query the foreground
+/// process group and read its CWD from the OS when shell integration
+/// (OSC 7) is not available.
+pty_fd: ?std.posix.fd_t = null,
+
 /// The color state for this terminal.
 colors: Colors,
 
@@ -2926,13 +2937,25 @@ pub fn resize(
     };
 }
 
-/// Set the pwd for the terminal.
+/// Set the pwd for the terminal. If `from_osc7` is not provided,
+/// this is treated as an initial/fallback pwd that may become stale.
 pub fn setPwd(self: *Terminal, pwd: []const u8) !void {
     self.pwd.clearRetainingCapacity();
     if (pwd.len > 0) {
         try self.pwd.appendSlice(self.gpa(), pwd);
         try self.pwd.append(self.gpa(), 0);
     }
+}
+
+/// Set the pwd from OSC 7 shell integration. This marks the pwd
+/// as actively tracked by the shell.
+pub fn setPwdFromOsc7(self: *Terminal, pwd: []const u8) !void {
+    self.pwd.clearRetainingCapacity();
+    if (pwd.len > 0) {
+        try self.pwd.appendSlice(self.gpa(), pwd);
+        try self.pwd.append(self.gpa(), 0);
+    }
+    self.pwd_from_osc7 = true;
 }
 
 /// Returns the pwd for the terminal, if any. The memory is owned by the
@@ -2956,6 +2979,13 @@ pub fn setTitle(self: *Terminal, t: []const u8) !void {
 pub fn getTitle(self: *const Terminal) ?[:0]const u8 {
     if (self.title.items.len == 0) return null;
     return self.title.items[0 .. self.title.items.len - 1 :0];
+}
+
+/// Set the PTY master fd for this terminal. This is used to query
+/// the foreground process and read its CWD from the OS when shell
+/// integration (OSC 7) is not available.
+pub fn setPtyFd(self: *Terminal, fd: std.posix.fd_t) void {
+    self.pty_fd = fd;
 }
 
 /// Switch to the given screen type (alternate or primary).
