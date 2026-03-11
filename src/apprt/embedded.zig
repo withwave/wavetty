@@ -1599,6 +1599,19 @@ pub const CAPI = struct {
         return surface.core_surface.child_exited;
     }
 
+    /// Get the current working directory of the surface. Copies the pwd
+    /// into the provided buffer and returns the length. Returns 0 if no
+    /// pwd is available or the buffer is too small.
+    export fn ghostty_surface_pwd(surface: *Surface, buf: [*]u8, buf_len: usize) usize {
+        const alloc = surface.app.core_app.alloc;
+        const p = (surface.core_surface.pwd(alloc) catch return 0) orelse return 0;
+        defer alloc.free(p);
+        if (p.len >= buf_len) return 0;
+        @memcpy(buf[0..p.len], p);
+        buf[p.len] = 0;
+        return p.len;
+    }
+
     /// Returns true if the surface has a selection.
     export fn ghostty_surface_has_selection(surface: *Surface) bool {
         return surface.core_surface.hasSelection();

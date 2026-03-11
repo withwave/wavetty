@@ -1830,7 +1830,19 @@ extension Ghostty {
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(pwd, forKey: .pwd)
+
+            // If pwd is nil (no shell integration / OSC 7), query the
+            // foreground process's CWD from the OS before saving state.
+            var effectivePwd = pwd
+            if effectivePwd == nil, let surface = self.surface {
+                var buf = [CChar](repeating: 0, count: 4096)
+                let len = ghostty_surface_pwd(surface, &buf, 4096)
+                if len > 0 {
+                    effectivePwd = String(cString: buf)
+                }
+            }
+            try container.encode(effectivePwd, forKey: .pwd)
+
             try container.encode(id.uuidString, forKey: .uuid)
             try container.encode(title, forKey: .title)
             try container.encode(titleFromTerminal != nil, forKey: .isUserSetTitle)
