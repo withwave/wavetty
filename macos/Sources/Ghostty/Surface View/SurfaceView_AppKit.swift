@@ -1866,6 +1866,23 @@ extension Ghostty {
             case isUserSetTitle
         }
 
+        /// Directory where scrollback files are persisted across launches.
+        private static var scrollbackDirectory: URL? {
+            guard let support = FileManager.default.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            ).first else { return nil }
+            let dir = support
+                .appendingPathComponent("com.mitchellh.ghostty")
+                .appendingPathComponent("scrollback")
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }
+
+        private static func scrollbackFile(for uuid: UUID) -> URL? {
+            scrollbackDirectory?.appendingPathComponent("\(uuid.uuidString).txt")
+        }
+
         required convenience init(from decoder: Decoder) throws {
             // Decoding uses the global Ghostty app
             guard let del = NSApplication.shared.delegate,
@@ -1891,6 +1908,11 @@ extension Ghostty {
                     self.titleFromTerminal = title
                 }
             }
+
+            // Asynchronously inject saved scrollback once the surface is ready.
+            if let restoredId = uuid {
+                self.restoreScrollback(uuid: restoredId)
+            }
         }
 
         func encode(to encoder: Encoder) throws {
@@ -1911,6 +1933,62 @@ extension Ghostty {
             try container.encode(id.uuidString, forKey: .uuid)
             try container.encode(title, forKey: .title)
             try container.encode(titleFromTerminal != nil, forKey: .isUserSetTitle)
+
+            // Save scrollback to a separate file (NSCoder is not suited
+            // for large binary payloads). Plain text only, no SGR attrs.
+            saveScrollbackToDisk()
+        }
+
+        /// Dump the current scrollback to disk for later restoration.
+        private func saveScrollbackToDisk() {
+            guard let surface = self.surface,
+                  let url = Self.scrollbackFile(for: self.id) else { return }
+
+            var s = ghostty_surface_dump_scrollback(surface)
+            defer { ghostty_string_free(s) }
+            guard let ptr = s.ptr, s.len > 0 else {
+                // Nothing to save; remove any stale file
+                try? FileManager.default.removeItem(at: url)
+                return
+            }
+
+            let data = Data(bytes: ptr, count: Int(s.len))
+            try? data.write(to: url, options: .atomic)
+        }
+
+        /// Inject saved scrollback (if any) into the terminal once the
+        /// underlying surface is ready. Polls briefly for surface attachment.
+        private func restoreScrollback(uuid: UUID, attempts: Int = 0) {
+            guard let url = Self.scrollbackFile(for: uuid),
+                  FileManager.default.fileExists(atPath: url.path) else { return }
+
+            // If surface isn't ready yet, retry a few times.
+            guard let surface = self.surface else {
+                if attempts > 40 {
+                    // Give up after ~2s
+                    return
+                }
+                let delay: DispatchTime = attempts == 0
+                    ? .now()
+                    : .now() + .milliseconds(50)
+                DispatchQueue.main.asyncAfter(deadline: delay) { [weak self] in
+                    self?.restoreScrollback(uuid: uuid, attempts: attempts + 1)
+                }
+                return
+            }
+
+            guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+                try? FileManager.default.removeItem(at: url)
+                return
+            }
+
+            data.withUnsafeBytes { (buf: UnsafeRawBufferPointer) in
+                guard let p = buf.baseAddress?.assumingMemoryBound(to: CChar.self) else { return }
+                ghostty_surface_write_text_to_screen(surface, p, UInt(data.count))
+            }
+
+            // Remove the file so a subsequent normal-quit launch doesn't replay it.
+            try? FileManager.default.removeItem(at: url)
         }
     }
 }

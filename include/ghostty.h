@@ -1234,6 +1234,8 @@ GHOSTTY_API void ghostty_surface_complete_clipboard_request(
     void*);
 GHOSTTY_API void ghostty_surface_deny_clipboard_request(ghostty_surface_t,
                                                            void*);
+GHOSTTY_API ghostty_string_s ghostty_surface_dump_scrollback(ghostty_surface_t);
+GHOSTTY_API void ghostty_surface_write_text_to_screen(ghostty_surface_t, const char*, uintptr_t);
 GHOSTTY_API bool ghostty_surface_has_selection(ghostty_surface_t);
 GHOSTTY_API bool ghostty_surface_read_selection(ghostty_surface_t, ghostty_text_s*);
 GHOSTTY_API bool ghostty_surface_read_text(ghostty_surface_t,

@@ -1872,6 +1872,63 @@ pub const CAPI = struct {
         return p.len;
     }
 
+    /// Dump the entire scrollback + screen as plain UTF-8 text.
+    /// The returned string is sentinel-terminated and must be freed by
+    /// the caller via ghostty_string_free.
+    export fn ghostty_surface_dump_scrollback(surface: *Surface) String {
+        const alloc = surface.app.core_app.alloc;
+        const core = &surface.core_surface;
+
+        core.renderer_state.mutex.lock();
+        defer core.renderer_state.mutex.unlock();
+
+        // Only dump primary screen scrollback (not alternate)
+        if (core.io.terminal.screens.active_key == .alternate) return .empty;
+
+        const pages = &core.io.terminal.screens.active.pages;
+        const sel = terminal.Selection.init(
+            pages.getTopLeft(.screen),
+            pages.getBottomRight(.screen) orelse return .empty,
+            false,
+        );
+
+        const text = core.io.terminal.screens.active.selectionString(alloc, .{
+            .sel = sel,
+            .trim = true,
+        }) catch |err| {
+            log.warn("error dumping scrollback err={}", .{err});
+            return .empty;
+        };
+
+        const copy = alloc.dupeZ(u8, text) catch {
+            alloc.free(text);
+            return .empty;
+        };
+        alloc.free(text);
+        return .fromSlice(copy);
+    }
+
+    /// Write text directly to the terminal screen (not to the PTY/shell).
+    /// Used for restoring scrollback content. The text is interpreted as
+    /// terminal output (so \n becomes newline rendering, etc.).
+    export fn ghostty_surface_write_text_to_screen(
+        surface: *Surface,
+        text: [*]const u8,
+        len: usize,
+    ) void {
+        const core = &surface.core_surface;
+        core.renderer_state.mutex.lock();
+        defer core.renderer_state.mutex.unlock();
+
+        const slice = text[0..len];
+        // Use the terminal's printString to write text directly to the
+        // screen buffer. This bypasses the PTY entirely, so the shell
+        // never sees this output.
+        core.io.terminal.printString(slice) catch |err| {
+            log.warn("error writing text to screen err={}", .{err});
+        };
+    }
+
     /// Returns true if the surface has a selection.
     export fn ghostty_surface_has_selection(surface: *Surface) bool {
         return surface.core_surface.hasSelection();
