@@ -251,6 +251,22 @@ class TerminalWindow: NSWindow {
         }
     }
 
+    /// Force-enable AppKit's standard tab management menu items.
+    ///
+    /// On macOS 15 (Sequoia) and earlier, NSWindow disables `View > Show Tab Bar`
+    /// and `Show All Tabs` menu items when the window has only a single tab and
+    /// `tabbingMode = .automatic`. macOS 26 (Tahoe) keeps them enabled. We
+    /// reproduce the Tahoe behavior on older systems so the user can always
+    /// reach these actions.
+    override func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if let action = item.action,
+           NSStringFromSelector(action) == "toggleTabBar:" ||
+           NSStringFromSelector(action) == "toggleTabOverview:" {
+            return tabbingMode != .disallowed
+        }
+        return super.validateMenuItem(item)
+    }
+
     override func addTitlebarAccessoryViewController(_ childViewController: NSTitlebarAccessoryViewController) {
         super.addTitlebarAccessoryViewController(childViewController)
 
