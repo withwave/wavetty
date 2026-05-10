@@ -6,7 +6,7 @@ extension Ghostty {
     class SurfaceView: OSSurfaceView {
         // The current title of the surface as defined by the pty. This can be
         // changed with escape codes.
-        @Published private(set) var title: String = "👻"
+        @Published private(set) var title: String = "🌊"
 
         /// True when the bell is active. This is set inactive on focus or event.
         @Published var bell: Bool = false

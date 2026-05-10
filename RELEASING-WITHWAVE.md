@@ -1,21 +1,43 @@
-# Releasing (withwave fork)
+# Releasing Wavetty (withwave fork)
 
-withwave/ghostty 포크의 릴리즈 빌드, 코드 서명, Apple 공증, GitHub Release 배포 절차.
+withwave/ghostty 포크는 **Wavetty**라는 별개의 앱으로 빌드/배포됩니다. Apple Developer ID 서명 + 공증 + GitHub Release 전체 파이프라인이 `scripts/build-wavetty.sh` 스크립트로 자동화되어 있습니다.
 
-## 사전 준비
+## 결과물
+
+- **앱 이름**: Wavetty
+- **번들 ID**: `com.modincompany.wavetty` (upstream `com.mitchellh.ghostty`와 분리)
+- **데이터 위치**: `~/Library/Application Support/com.modincompany.wavetty/`
+- **자동 업데이트**: 비활성 — GitHub Releases에서 수동 체크
+- **아이콘**: 커스텀 wave 디자인 (`scripts/icon.icns`)
+- **서명**: Apple Developer ID Application: MODIN COMPANY (8AC9KUZJ5P)
+
+## 빠른 빌드
+
+```bash
+# 빌드만
+./scripts/build-wavetty.sh
+
+# 빌드 + DMG 생성 + 공증 + Stapler
+./scripts/build-wavetty.sh --dmg
+
+# 빌드 + DMG + 공증 + GitHub Release 업로드
+./scripts/build-wavetty.sh --release
+```
+
+## 사전 준비 (최초 1회)
 
 ### 1. Apple Developer 계정
 
 - Apple Developer Program 가입 ($99/년)
-- 팀 ID 확인: 예) `8AC9KUZJ5P` (MODIN COMPANY)
-- Apple ID 이메일: 예) `sspark.modin@gmail.com`
+- 팀 ID: `8AC9KUZJ5P` (MODIN COMPANY)
+- Apple ID: 메인 계정 이메일
 
-### 2. App-Specific Password
+### 2. App-Specific Password 생성
 
-Notarization용 앱 전용 비밀번호 생성:
+Notarization용 앱 전용 비밀번호:
 1. https://account.apple.com/sign-in 접속
 2. **로그인 및 보안** → **앱 암호** → `+`
-3. 라벨 입력 (예: `Ghostty Notarization`) → 16자리 암호 복사
+3. 라벨 입력 후 16자리 암호 복사
 
 ### 3. Developer ID Application 인증서
 
@@ -33,8 +55,7 @@ openssl req -new -newkey rsa:2048 -nodes \
 1. https://developer.apple.com/account/resources/certificates 접속
 2. `+` → `Software` > `Developer ID Application`
 3. **Profile Type**: `G2 Sub-CA (Xcode 11.4.1 or later)`
-4. 위에서 생성한 `.certSigningRequest` 업로드
-5. `.cer` 다운로드
+4. CSR 업로드 → `.cer` 다운로드
 
 #### Keychain 등록
 
@@ -42,7 +63,7 @@ openssl req -new -newkey rsa:2048 -nodes \
 # DER → PEM 변환
 openssl x509 -inform der -in ~/developerID_application.cer -out ~/developerID_application.pem
 
-# .p12 묶음 생성 (legacy 포맷 필수, macOS keychain 호환)
+# .p12 묶음 (legacy 포맷 필수, macOS keychain 호환)
 openssl pkcs12 -export -legacy \
   -inkey ~/MODIN_developer.key \
   -in ~/developerID_application.pem \
@@ -50,7 +71,7 @@ openssl pkcs12 -export -legacy \
   -name "Developer ID Application: COMPANY_NAME" \
   -password pass:PASSWORD
 
-# Keychain에 import
+# Keychain import
 security import ~/MODIN_developerID.p12 \
   -k ~/Library/Keychains/login.keychain-db \
   -P "PASSWORD" \
@@ -66,101 +87,41 @@ security find-identity -v -p codesigning
 ```bash
 xcrun notarytool store-credentials "modin-notary" \
   --apple-id "APPLE_ID_EMAIL" \
-  --team-id "TEAM_ID" \
+  --team-id "8AC9KUZJ5P" \
   --password "APP_SPECIFIC_PASSWORD"
 ```
 
-이후 `--keychain-profile "modin-notary"` 로 재사용.
-
-## 릴리즈 빌드 절차
-
-### 1. 릴리즈 빌드
+### 5. Patched Zig 설치 (Xcode 26.4 호환)
 
 ```bash
-# Xcode 26.4 호환을 위해 patched zig 사용
-PATH=/opt/homebrew/opt/zig@0.15/bin:$PATH \
-  zig build -Doptimize=ReleaseFast
+brew install zig@0.15
 ```
 
-> **Note**: Xcode 26.4 + 표준 Zig 0.15.2는 링크 에러 발생.
-> `brew install zig@0.15` 로 패치된 버전 사용 필수.
+표준 Zig 0.15.2는 Xcode 26.4와 링크 에러가 발생하므로 brew bottle (패치 버전) 사용 필수.
 
-### 2. 코드 서명 (Developer ID + Hardened Runtime + Timestamp)
+### 6. Metal Toolchain (Xcode 업데이트 후 필요시)
 
 ```bash
-codesign --force --deep --sign "Developer ID Application: MODIN COMPANY (8AC9KUZJ5P)" \
-  --options runtime \
-  --entitlements macos/GhosttyReleaseLocal.entitlements \
-  --timestamp \
-  zig-out/Ghostty.app
-
-# 검증
-codesign --verify --deep --strict --verbose=2 zig-out/Ghostty.app
+xcodebuild -downloadComponent MetalToolchain
 ```
 
-### 3. DMG 패키징
+## 스크립트 동작 원리
 
-```bash
-hdiutil create -volname "Ghostty" \
-  -srcfolder zig-out/Ghostty.app \
-  -ov -format UDZO \
-  zig-out/Ghostty.dmg
+`scripts/build-wavetty.sh`는 **upstream 파일을 전혀 건드리지 않습니다**. 모든 리브랜딩은 `zig build` 결과물에 후처리로 적용:
 
-# DMG도 서명
-codesign --force --sign "Developer ID Application: MODIN COMPANY (8AC9KUZJ5P)" \
-  --timestamp \
-  zig-out/Ghostty.dmg
-```
+1. `zig build -Doptimize=ReleaseFast` 실행
+2. 빌드된 `Ghostty.app` 의 `Info.plist` 를 `plutil` 로 수정:
+   - `CFBundleName` / `CFBundleDisplayName` → `Wavetty`
+   - `CFBundleIdentifier` → `com.modincompany.wavetty`
+   - `CFBundleShortVersionString` → `VERSION` 파일 내용
+   - `SUPublicEDKey` 제거, `SUEnableAutomaticChecks = false`
+3. `scripts/icon.icns` 가 있으면 `Ghostty.icns` 교체
+4. Developer ID 서명 (hardened runtime + timestamp)
+5. (`--dmg`) DMG 생성 + 서명
+6. (`--dmg`) Apple Notarization 제출 → Stapler
+7. (`--release`) GitHub Release 자산 업로드
 
-### 4. Notarization 제출
-
-```bash
-xcrun notarytool submit zig-out/Ghostty.dmg \
-  --keychain-profile "modin-notary" \
-  --wait
-```
-
-`status: Accepted` 가 떠야 성공. 보통 1-5분 소요.
-
-거절되면:
-```bash
-xcrun notarytool log <SUBMISSION_ID> --keychain-profile "modin-notary"
-```
-
-### 5. Stapler (공증 영구 첨부)
-
-```bash
-xcrun stapler staple zig-out/Ghostty.dmg
-
-# 검증
-xcrun stapler validate zig-out/Ghostty.dmg
-spctl -a -t open --context context:primary-signature -v zig-out/Ghostty.dmg
-# → "source=Notarized Developer ID" 표시되면 OK
-```
-
-### 6. GitHub Release 업로드
-
-```bash
-gh release create vX.Y.Z-withwave \
-  zig-out/Ghostty.dmg \
-  --repo withwave/ghostty \
-  --target main \
-  --title "vX.Y.Z-withwave: ..." \
-  --notes "..."
-
-# 또는 기존 릴리즈에 자산 교체
-gh release upload vX.Y.Z-withwave zig-out/Ghostty.dmg \
-  --repo withwave/ghostty --clobber
-```
-
-## 한 번에 빌드+서명+공증+배포
-
-전체 절차를 자동화하려면 `scripts/release-withwave.sh` 같은 스크립트 작성을 권장.
-
-핵심 변수:
-- `IDENTITY="Developer ID Application: MODIN COMPANY (8AC9KUZJ5P)"`
-- `NOTARY_PROFILE="modin-notary"`
-- `ENTITLEMENTS="macos/GhosttyReleaseLocal.entitlements"`
+→ `git rebase upstream/main` 시 충돌 가능성 0.
 
 ## 트러블슈팅
 
@@ -171,16 +132,35 @@ gh release upload vX.Y.Z-withwave zig-out/Ghostty.dmg \
 → Xcode 26.4 + 표준 Zig 0.15.2 비호환. `brew install zig@0.15` 사용.
 
 ### `cannot execute tool 'metal' due to missing Metal Toolchain`
-→ Xcode 업데이트 직후. 다음 명령어로 재설치:
-```bash
-xcodebuild -downloadComponent MetalToolchain
-```
+→ Xcode 업데이트 직후. `xcodebuild -downloadComponent MetalToolchain` 재설치.
 
 ### Notarization `Invalid` 응답
-→ `notarytool log` 로 상세 에러 확인. 흔한 원인:
-- Hardened runtime 미적용 → `--options runtime` 빠짐
-- Timestamp 누락 → `--timestamp` 빠짐
-- 일부 바이너리 미서명 → `--deep` 옵션 빠짐
+→ `xcrun notarytool log <SUBMISSION_ID> --keychain-profile modin-notary` 로 상세 확인. 흔한 원인:
+- Hardened runtime 미적용 → `--options runtime`
+- Timestamp 누락 → `--timestamp`
+- 일부 바이너리 미서명 → `--deep`
 
-### Gatekeeper 계속 차단
-→ Stapler 누락 가능성. 네트워크 없는 환경에서는 stapler 필수.
+### 사용자 측 Gatekeeper 경고
+공증 + Stapler가 제대로 됐다면 발생 안 함. 만약 경고가 보이면:
+```bash
+xattr -cr /Applications/Wavetty.app
+```
+또는 우클릭 → 열기.
+
+## 향후 개선 후보
+
+- **Sparkle 자동 업데이트**: 별도 EdDSA 키 생성 + appcast.xml 호스팅 + Swift `UpdateDelegate` 분기 처리 필요. 작업량 큼.
+- **더 정교한 아이콘**: 현재는 ImageMagick 패스로 그린 단순 디자인. 디자이너 개입 시 교체.
+- **데이터 마이그레이션**: 기존 `com.mitchellh.ghostty` 디렉토리에서 자동 복사하는 옵션.
+
+## 데이터 위치 변경 안내
+
+기존 Ghostty 사용자가 Wavetty로 전환할 경우:
+
+```bash
+# 설정 복사
+cp ~/Library/Application\ Support/com.mitchellh.ghostty/config \
+   ~/Library/Application\ Support/com.modincompany.wavetty/config
+```
+
+스크롤백/세션 상태는 자동 복원되지 않습니다 (별개의 앱이므로).

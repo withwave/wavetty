@@ -96,7 +96,7 @@ class BaseTerminalController: NSWindowController,
     }
 
     /// The last computed title from the focused surface (without the override).
-    private var lastComputedTitle: String = "👻"
+    private var lastComputedTitle: String = "🌊"
 
     /// The time that undo/redo operations that contain running ptys are valid for.
     var undoExpiration: Duration {
@@ -821,14 +821,14 @@ class BaseTerminalController: NSWindowController,
                 .store(in: &focusedSurfaceCancellables)
         } else {
             // There is no surface to listen to titles for.
-            titleDidChange(to: "👻")
+            titleDidChange(to: "🌊")
         }
     }
 
     private func computeTitle(title: String, bell: Bool) -> String {
         var result = title
         if bell && ghostty.config.bellFeatures.contains(.title) {
-            result = "🔔 \(result)"
+            result = "\(result) 🔔"
         }
 
         return result
