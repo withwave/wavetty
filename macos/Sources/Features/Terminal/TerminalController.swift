@@ -1612,6 +1612,13 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 extension TerminalController {
     override func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case NSSelectorFromString("toggleTabBar:"):
+            // On macOS < 26 (Sequoia and earlier), `tabbingMode = .automatic`
+            // causes AppKit to disable this menu when only a single tab is
+            // visible. We force-enable it so the user can show the tab bar.
+            guard let window else { return false }
+            return window.tabbingMode != .disallowed
+
         case #selector(closeTabsOnTheRight):
             guard let window, let tabGroup = window.tabGroup else { return false }
             guard let currentIndex = tabGroup.windows.firstIndex(of: window) else { return false }
