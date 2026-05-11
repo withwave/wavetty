@@ -145,13 +145,39 @@ echo "    Version      : $VERSION"
 
 # Custom icon: macOS prioritizes CFBundleIconName (asset catalog) over
 # CFBundleIconFile (.icns). Remove the asset-catalog reference so the
-# .icns we drop in is actually used. Assets.car stays intact for
-# AccentColor, Alternate Icons, etc.
+# .icns we drop in is actually used. Also rename the file to Wavetty.icns
+# so no "Ghostty" filename remains in Contents/Resources.
 if [ -f "$ROOT/scripts/icon.icns" ]; then
-    cp "$ROOT/scripts/icon.icns" "$APP/Contents/Resources/Ghostty.icns"
+    rm -f "$APP/Contents/Resources/Ghostty.icns"
+    cp "$ROOT/scripts/icon.icns" "$APP/Contents/Resources/$APP_NAME.icns"
+    plutil -replace CFBundleIconFile -string "$APP_NAME" "$PLIST"
     plutil -remove CFBundleIconName "$PLIST" 2>/dev/null || true
-    echo "    Icon         : custom (scripts/icon.icns)"
+    echo "    Icon         : custom (scripts/icon.icns -> $APP_NAME.icns)"
 fi
+
+# Rename Ghostty.sdef (AppleScript definitions) to Wavetty.sdef and patch
+# the OSAScriptingDefinition reference. The sdef content itself stays
+# unchanged — its internal identifiers are AppleScript class names that
+# must match what Swift exposes.
+if [ -f "$APP/Contents/Resources/Ghostty.sdef" ]; then
+    mv "$APP/Contents/Resources/Ghostty.sdef" "$APP/Contents/Resources/$APP_NAME.sdef"
+    plutil -replace OSAScriptingDefinition -string "$APP_NAME.sdef" "$PLIST"
+    echo "    sdef         : Ghostty.sdef -> $APP_NAME.sdef"
+fi
+
+# Patch user-visible Ghostty strings in Info.plist:
+#   * NS*UsageDescription — shown in permission dialogs
+#   * Finder Quick Actions ("New Ghostty Tab/Window Here")
+# The plist is XML so plain sed works. Internal keys like
+# GhosttyBuild/GhosttyCommit and GHOSTTY_MAC_LAUNCH_SOURCE are kept
+# as-is — they're read by code, not shown to users.
+LC_ALL=C sed -i '' \
+    -e 's|A program running within Ghostty|A program running within '"$APP_NAME"'|g' \
+    -e 's|New Ghostty Tab Here|New '"$APP_NAME"' Tab Here|g' \
+    -e 's|New Ghostty Window Here|New '"$APP_NAME"' Window Here|g' \
+    -e 's|Ghostty Surface Identifier|'"$APP_NAME"' Surface Identifier|g' \
+    "$PLIST"
+echo "    Info.plist   : NSUsageDescription + QuickActions + UTI desc rebrand"
 
 # Rename hardcoded user-facing menu/UI strings in the compiled .nib files.
 # Only matches strings with spaces so we don't touch Swift mangled class
