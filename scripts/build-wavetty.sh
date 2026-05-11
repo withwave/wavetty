@@ -49,7 +49,8 @@ done
 
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
-APP="$ROOT/zig-out/Ghostty.app"
+BUILD_APP="$ROOT/zig-out/Ghostty.app"
+APP="$ROOT/zig-out/$APP_NAME.app"
 DMG="$ROOT/zig-out/$APP_NAME.dmg"
 
 # Patch upstream sources before build, restore on exit so rebases stay clean.
@@ -110,10 +111,22 @@ fi
 echo "==> Step 1: zig build (ReleaseFast)"
 zig build -Doptimize=ReleaseFast
 restore_sources
-[ -x "$APP/Contents/MacOS/ghostty" ] || { echo "Build failed: binary missing"; exit 1; }
+[ -x "$BUILD_APP/Contents/MacOS/ghostty" ] || { echo "Build failed: binary missing"; exit 1; }
+
+# Rename bundle to Wavetty.app and the main executable to lowercase wavetty.
+# This makes the process name in Activity Monitor / ps show as "wavetty".
+rm -rf "$APP"
+mv "$BUILD_APP" "$APP"
+EXEC_NAME="$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]')"
+mv "$APP/Contents/MacOS/ghostty" "$APP/Contents/MacOS/$EXEC_NAME"
+echo "    Bundle renamed   : $(basename "$BUILD_APP") -> $(basename "$APP")"
+echo "    Executable       : ghostty -> $EXEC_NAME"
 
 echo "==> Step 2: Rebrand bundle"
 PLIST="$APP/Contents/Info.plist"
+
+# Executable name in Info.plist must match the file in MacOS/.
+plutil -replace CFBundleExecutable -string "$EXEC_NAME" "$PLIST"
 
 # Display name (Dock, Finder, Cmd+Tab, About)
 plutil -replace CFBundleName -string "$APP_NAME" "$PLIST"
@@ -181,8 +194,12 @@ if [ "$MAKE_DMG" -eq 0 ]; then
     exit 0
 fi
 
-echo "==> Step 4: Create DMG"
-hdiutil create -volname "$APP_NAME" -srcfolder "$APP" -ov -format UDZO "$DMG"
+echo "==> Step 4: Create DMG (with /Applications drag-and-drop layout)"
+DMG_STAGE=$(mktemp -d)
+cp -R "$APP" "$DMG_STAGE/$APP_NAME.app"
+ln -s /Applications "$DMG_STAGE/Applications"
+hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG"
+rm -rf "$DMG_STAGE"
 codesign --force --sign "$SIGNING_IDENTITY" --timestamp "$DMG"
 echo "    DMG created and signed."
 
