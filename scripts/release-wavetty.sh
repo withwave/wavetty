@@ -138,15 +138,21 @@ else
     echo "    Tag $TAG already exists locally."
 fi
 
-git push "$ORIGIN_REMOTE" "$ORIGIN_BRANCH"
+# After rebase, history is rewritten — force-with-lease is required for
+# the branch push. The lease ensures we only overwrite if remote matches
+# what we expect (safer than plain --force).
+if ! git push "$ORIGIN_REMOTE" "$ORIGIN_BRANCH"; then
+    echo "    Fast-forward push failed (history rewritten by rebase)."
+    echo "    Retrying with --force-with-lease..."
+    git push "$ORIGIN_REMOTE" "$ORIGIN_BRANCH" --force-with-lease
+fi
 echo "    Pushed $ORIGIN_BRANCH"
 
-# Push tag (force if it already existed remotely and we want to update it)
-if git push "$ORIGIN_REMOTE" "$TAG" 2>&1 | tee /tmp/.push_tag; then
-    echo "    Pushed tag $TAG"
+if ! git push "$ORIGIN_REMOTE" "$TAG" 2>/dev/null; then
+    echo "    Tag $TAG already on remote (or push failed)."
+    echo "    To overwrite: git push $ORIGIN_REMOTE $TAG --force"
 else
-    echo "    Tag push failed — likely already on remote."
-    echo "    Re-tag remote? Run: git push $ORIGIN_REMOTE $TAG --force"
+    echo "    Pushed tag $TAG"
 fi
 
 echo ""
