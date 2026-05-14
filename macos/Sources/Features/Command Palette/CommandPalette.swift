@@ -61,6 +61,11 @@ struct CommandPaletteView: View {
     @Binding var isPresented: Bool
     var backgroundColor: Color = Color(nsColor: .windowBackgroundColor)
     var options: [CommandOption]
+    /// Wavetty: additional options computed from the current query, prepended
+    /// before static options and bypassing the title/subtitle filter. Used by
+    /// the SSH host integration to inject a "Connect to user@host:port" item
+    /// when the user types a freeform ssh URI.
+    var dynamicOptions: ((String) -> [CommandOption])? = nil
     @State private var rawQuery = ""
     @State private var selectedIndex: UInt?
     @State private var hoveredOptionID: UUID?
@@ -72,8 +77,12 @@ struct CommandPaletteView: View {
     // The options that we should show, taking into account any filtering from
     // the query. Options with matching leadingColor are ranked higher.
     var filteredOptions: [CommandOption] {
+        // Wavetty: query-dependent options bypass the filter and appear on top.
+        let dynamic = dynamicOptions?(query) ?? []
+
+        let staticFiltered: [CommandOption]
         if query.isEmpty {
-            return options
+            staticFiltered = options
         } else {
             // Filter by title/subtitle match OR color match
             let filtered = options.filter {
@@ -83,12 +92,13 @@ struct CommandPaletteView: View {
             }
 
             // Sort by color match score (higher scores first), then maintain original order
-            return filtered.sorted { a, b in
+            staticFiltered = filtered.sorted { a, b in
                 let scoreA = colorMatchScore(for: a.leadingColor, query: query)
                 let scoreB = colorMatchScore(for: b.leadingColor, query: query)
                 return scoreA > scoreB
             }
         }
+        return dynamic + staticFiltered
     }
 
     var selectedOption: CommandOption? {

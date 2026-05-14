@@ -31,7 +31,8 @@ struct TerminalCommandPaletteView: View {
                         CommandPaletteView(
                             isPresented: $isPresented,
                             backgroundColor: ghosttyConfig.backgroundColor,
-                            options: commandOptions
+                            options: commandOptions,
+                            dynamicOptions: sshDynamicOptions
                         )
                         .zIndex(1) // Ensure it's on top
 
@@ -175,6 +176,56 @@ struct TerminalCommandPaletteView: View {
         }
     }
 
+
+    /// Wavetty: SSH host suggestions activated when the user types "ssh".
+    /// Bypasses the palette's title/subtitle filter — we handle matching
+    /// ourselves so the items only appear in SSH mode.
+    private func sshDynamicOptions(query: String) -> [CommandOption] {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        let lower = trimmed.lowercased()
+        guard lower == "ssh" || lower.hasPrefix("ssh ") else { return [] }
+
+        let body: String = if lower == "ssh" {
+            ""
+        } else {
+            String(trimmed.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+        }
+
+        var items: [CommandOption] = []
+
+        // (1) "Add & Connect" item when body parses as a URI we don't already have.
+        // Heuristic: must contain @, :, or . to look like a real host (avoids
+        // false-positive when user types short alias guesses).
+        if !body.isEmpty,
+           body.contains(where: { "@:.".contains($0) }),
+           let parsed = SSHURIParser.parse(body),
+           SSHHostStore.shared.existingMatch(for: parsed) == nil {
+            let alias = parsed.explicitAlias
+                ?? SSHHostStore.shared.generateAlias(host: parsed.host, user: parsed.user, port: parsed.port)
+            let target = "\(parsed.user.map { "\($0)@" } ?? "")\(parsed.host)\(parsed.port.map { ":\($0)" } ?? "")"
+            items.append(CommandOption(
+                title: "SSH: Add & Connect \(target)",
+                subtitle: "Save as \"\(alias)\" in ~/.ssh/config",
+                leadingIcon: "plus.circle.fill",
+                emphasis: true
+            ) {
+                _ = SSHHostStore.shared.connect(uri: body)
+            })
+        }
+
+        // (2) Existing host suggestions filtered by body.
+        for host in SSHHostStore.shared.suggestions(for: body) {
+            items.append(CommandOption(
+                title: "SSH: \(host.alias)",
+                subtitle: host.displayHost,
+                leadingIcon: host.metadata.pinned ? "pin.fill" : "network"
+            ) {
+                SSHHostStore.shared.connect(host)
+            })
+        }
+
+        return items
+    }
 }
 
 /// This is done to ensure that the given view is in the responder chain.
