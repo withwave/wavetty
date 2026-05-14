@@ -224,6 +224,15 @@ struct TerminalCommandPaletteView: View {
             })
         }
 
+        // (3) Always offer the manager when in "ssh" mode.
+        items.append(CommandOption(
+            title: "SSH: Manage Hosts…",
+            subtitle: "Edit metadata, add/remove hosts",
+            leadingIcon: "slider.horizontal.3"
+        ) {
+            SSHHostManagerWindowController.show()
+        })
+
         return items
     }
 }

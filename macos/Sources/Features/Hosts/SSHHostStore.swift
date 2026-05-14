@@ -145,6 +145,59 @@ final class SSHHostStore: ObservableObject {
         rebuild()
     }
 
+    /// Patch metadata for a host. Creates an entry if missing.
+    func updateMetadata(_ alias: String, _ transform: (inout SSHHostMetadata) -> Void) {
+        var m = metadata[alias] ?? SSHHostMetadata()
+        transform(&m)
+        metadata[alias] = m
+        SSHHostMetadataStore.save(metadata)
+        rebuild()
+    }
+
+    /// Adds a host with explicit fields (from the manager UI's Add form).
+    @discardableResult
+    func addHost(
+        alias: String,
+        hostName: String,
+        user: String?,
+        port: Int?,
+        identityFile: String?,
+        proxyJump: String?,
+        group: String?
+    ) throws -> SSHHost {
+        guard !alias.isEmpty, alias.allSatisfy({ $0.isLetter || $0.isNumber || "._-".contains($0) }) else {
+            throw NSError(domain: "Wavetty.SSH", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Invalid alias: must contain only letters, digits, '.', '_', '-'"])
+        }
+        guard !hosts.contains(where: { $0.alias == alias }) else {
+            throw NSError(domain: "Wavetty.SSH", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "Alias '\(alias)' already exists"])
+        }
+        let entry = SSHConfigEntry(
+            alias: alias,
+            hostName: hostName,
+            user: user?.isEmpty == false ? user : nil,
+            port: port,
+            identityFile: identityFile?.isEmpty == false ? identityFile : nil,
+            proxyJump: proxyJump?.isEmpty == false ? proxyJump : nil
+        )
+        try SSHConfigParser.appendHost(entry)
+        metadata[alias] = SSHHostMetadata(group: group, autoAdded: false)
+        SSHHostMetadataStore.save(metadata)
+        reload()
+        return hosts.first(where: { $0.alias == alias })
+            ?? SSHHost(alias: alias, config: entry, metadata: metadata[alias]!)
+    }
+
+    /// Removes a host's ssh_config block AND metadata. Caller must confirm
+    /// with the user first — this is destructive on user-curated entries.
+    func removeHost(alias: String) throws {
+        try SSHConfigParser.removeHost(alias: alias)
+        metadata.removeValue(forKey: alias)
+        SSHHostMetadataStore.save(metadata)
+        reload()
+    }
+
     // MARK: - Connect
 
     /// Opens a new tab (or new window) running `ssh <alias>` directly as
