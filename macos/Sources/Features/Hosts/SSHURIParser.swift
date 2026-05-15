@@ -17,6 +17,19 @@ enum SSHURIParser {
         var explicitAlias: String?
     }
 
+    /// Compile regex once at static-init time. NSRegularExpression compilation
+    /// (ICU) is ~ms-scale on Intel Macs and we're called on every palette
+    /// keystroke, so caching is worth it.
+    private static let uriRegex: NSRegularExpression = {
+        let pattern = #"^(?:([^@\s]+)@)?(\[[^\]]+\]|[^\s:]+)(?::(\d+))?$"#
+        // Pattern is constant and known-valid; force-unwrap.
+        return try! NSRegularExpression(pattern: pattern)
+    }()
+
+    private static let aliasSuffixRegex: NSRegularExpression = {
+        try! NSRegularExpression(pattern: #"\s+as\s+([^\s]+)\s*$"#)
+    }()
+
     /// Returns nil if input doesn't match the shorthand grammar.
     static func parse(_ input: String) -> Parsed? {
         let trimmed = input.trimmingCharacters(in: .whitespaces)
@@ -25,19 +38,16 @@ enum SSHURIParser {
         // Split off " as <alias>" if present.
         var body = trimmed
         var alias: String? = nil
-        if let asRange = trimmed.range(of: #"\s+as\s+([^\s]+)\s*$"#, options: .regularExpression) {
-            let aliasPart = trimmed[asRange]
-            // Extract alias token after "as "
-            let tokens = aliasPart.split(separator: " ", omittingEmptySubsequences: true)
-            if let last = tokens.last { alias = String(last) }
-            body = String(trimmed[..<asRange.lowerBound]).trimmingCharacters(in: .whitespaces)
+        let fullRange = NSRange(trimmed.startIndex..., in: trimmed)
+        if let m = aliasSuffixRegex.firstMatch(in: trimmed, range: fullRange),
+           let aliasRange = Range(m.range(at: 1), in: trimmed),
+           let cutRange = Range(m.range, in: trimmed) {
+            alias = String(trimmed[aliasRange])
+            body = String(trimmed[..<cutRange.lowerBound]).trimmingCharacters(in: .whitespaces)
         }
 
-        // Grammar: [user@]host[:port]   host may be [IPv6] or plain
-        let pattern = #"^(?:([^@\s]+)@)?(\[[^\]]+\]|[^\s:]+)(?::(\d+))?$"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
         let range = NSRange(body.startIndex..., in: body)
-        guard let m = regex.firstMatch(in: body, range: range) else { return nil }
+        guard let m = uriRegex.firstMatch(in: body, range: range) else { return nil }
 
         var user: String? = nil
         if let r = Range(m.range(at: 1), in: body), !body[r].isEmpty {

@@ -235,6 +235,10 @@ class AppDelegate: NSObject,
         // Wavetty: check GitHub Releases for newer fork versions (Sparkle is disabled).
         WavettyUpdateChecker.checkOnLaunch()
 
+        // Wavetty: pre-warm SSH host store so first palette interaction doesn't
+        // hit ~/.ssh/config + JSON I/O on the main thread (noticeable on Intel Macs).
+        _ = SSHHostStore.shared
+
         // Register our service provider. This must happen after everything is initialized.
         NSApp.servicesProvider = ServiceProvider()
 
