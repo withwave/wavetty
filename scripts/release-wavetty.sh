@@ -114,23 +114,15 @@ DMG="$ROOT/zig-out/Wavetty.dmg"
 [ -f "$DMG" ] || { echo "ERROR: DMG not produced at $DMG"; exit 1; }
 
 # ---------------------------------------------------------------------------
-# Step 4: Create or update GitHub Release
+# Step 4: Push branch + tag BEFORE creating the GitHub release.
+#
+# Order matters: `gh release create` will auto-create the tag on GitHub
+# pointing at the current remote HEAD of the default branch. If we haven't
+# pushed our bump commit yet, the tag ends up on the wrong commit. So we
+# push commits + tag first, then `gh release create` just attaches the
+# DMG to the already-existing tag.
 # ---------------------------------------------------------------------------
-echo "==> Step 4: GitHub Release $TAG"
-if gh release view "$TAG" --repo "$GITHUB_REPO" >/dev/null 2>&1; then
-    echo "    Release exists. Replacing DMG asset."
-    gh release upload "$TAG" "$DMG" --repo "$GITHUB_REPO" --clobber
-else
-    echo "    Creating new release."
-    gh release create "$TAG" "$DMG" --repo "$GITHUB_REPO" \
-        --title "Wavetty $VERSION" \
-        --notes "Wavetty $VERSION release. See commit log for changes."
-fi
-
-# ---------------------------------------------------------------------------
-# Step 5: Tag commit locally + push branch + tag
-# ---------------------------------------------------------------------------
-echo "==> Step 5: Tag and push"
+echo "==> Step 4: Push branch + tag"
 if ! git rev-parse "$TAG" >/dev/null 2>&1; then
     git tag "$TAG"
     echo "    Created local tag $TAG"
@@ -148,11 +140,26 @@ if ! git push "$ORIGIN_REMOTE" "$ORIGIN_BRANCH"; then
 fi
 echo "    Pushed $ORIGIN_BRANCH"
 
+# Force-push the tag so it always reflects the local commit (handles
+# previously-misaligned remote tags).
 if ! git push "$ORIGIN_REMOTE" "$TAG" 2>/dev/null; then
-    echo "    Tag $TAG already on remote (or push failed)."
-    echo "    To overwrite: git push $ORIGIN_REMOTE $TAG --force"
+    echo "    Tag $TAG already on remote with different value; force-updating."
+    git push "$ORIGIN_REMOTE" "$TAG" --force
+fi
+echo "    Pushed tag $TAG"
+
+# ---------------------------------------------------------------------------
+# Step 5: Create or update GitHub Release (tag now exists on remote)
+# ---------------------------------------------------------------------------
+echo "==> Step 5: GitHub Release $TAG"
+if gh release view "$TAG" --repo "$GITHUB_REPO" >/dev/null 2>&1; then
+    echo "    Release exists. Replacing DMG asset."
+    gh release upload "$TAG" "$DMG" --repo "$GITHUB_REPO" --clobber
 else
-    echo "    Pushed tag $TAG"
+    echo "    Creating new release."
+    gh release create "$TAG" "$DMG" --repo "$GITHUB_REPO" \
+        --title "Wavetty $VERSION" \
+        --notes "Wavetty $VERSION release. See commit log for changes."
 fi
 
 echo ""
