@@ -222,6 +222,14 @@ class AppDelegate: NSObject,
         // hit ~/.ssh/config + JSON I/O on the main thread (noticeable on Intel Macs).
         _ = SSHHostStore.shared
 
+        // Wavetty: start recording recent sessions now so the periodic
+        // persistence is active immediately — this is what lets a force-kill /
+        // crash still leave a usable "Recent Sessions" list behind.
+        _ = SessionHistoryStore.shared
+
+        // Wavetty: add the top-level "SSH" menu (built in code, no xib edit).
+        SSHMenuController.shared.install()
+
         // Register our service provider. This must happen after everything is initialized.
         NSApp.servicesProvider = ServiceProvider()
 
@@ -1092,6 +1100,8 @@ class AppDelegate: NSObject,
 extension AppDelegate {
     /// This is called for the dock right-click menu.
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        // Rebuild on each open so the recent-sessions list is always current.
+        reloadDockMenu()
         return dockMenu
     }
 
@@ -1102,6 +1112,57 @@ extension AppDelegate {
         dockMenu.removeAllItems()
         dockMenu.addItem(newWindow)
         dockMenu.addItem(newTab)
+
+        // Wavetty: recent windows. Closed windows linger here so the user can
+        // deliberately reopen one (with its tabs, splits, and position) even
+        // after a clean quit or a crash. The dock menu is only ever built on
+        // the main thread, so it's safe to touch the MainActor store here.
+        let windows = MainActor.assumeIsolated { SessionHistoryStore.shared.recentWindows }
+        if !windows.isEmpty {
+            dockMenu.addItem(.separator())
+            let header = NSMenuItem(title: "Recent Windows", action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            dockMenu.addItem(header)
+            for window in windows {
+                let item = NSMenuItem(
+                    title: window.displayName,
+                    action: #selector(restoreRecentWindow(_:)),
+                    keyEquivalent: "")
+                item.target = self
+                item.representedObject = window
+                item.setImageIfDesired(systemSymbolName: window.isSSH ? "network" : "macwindow")
+                dockMenu.addItem(item)
+            }
+        }
+
+        // Wavetty: SSH hosts — pinned/recent first, one click to connect.
+        let sshHosts = MainActor.assumeIsolated { SSHHostStore.shared.suggestions(for: "", limit: 8) }
+        if !sshHosts.isEmpty {
+            dockMenu.addItem(.separator())
+            let header = NSMenuItem(title: "SSH Hosts", action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            dockMenu.addItem(header)
+            for host in sshHosts {
+                let item = NSMenuItem(
+                    title: host.alias,
+                    action: #selector(connectSSHHost(_:)),
+                    keyEquivalent: "")
+                item.target = self
+                item.representedObject = host.alias
+                item.setImageIfDesired(systemSymbolName: host.metadata.pinned ? "pin.fill" : "network")
+                dockMenu.addItem(item)
+            }
+        }
+    }
+
+    @objc private func connectSSHHost(_ sender: NSMenuItem) {
+        guard let alias = sender.representedObject as? String else { return }
+        MainActor.assumeIsolated { _ = SSHHostStore.shared.connect(alias: alias) }
+    }
+
+    @objc private func restoreRecentWindow(_ sender: NSMenuItem) {
+        guard let window = sender.representedObject as? RecentWindow else { return }
+        MainActor.assumeIsolated { SessionHistoryStore.shared.restore(window) }
     }
 
     /// Setup all the images for our menu items.

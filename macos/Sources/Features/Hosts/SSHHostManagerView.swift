@@ -5,9 +5,15 @@ import SwiftUI
 /// Palette item "SSH: Manage Hosts...".
 @MainActor
 final class SSHHostManagerWindowController: NSWindowController {
-    static private weak var existing: SSHHostManagerWindowController?
+    // Strong reference: keeping the controller (and its already-built SwiftUI
+    // view) alive makes reopening instant. With a weak ref the controller was
+    // deallocated after each show(), so every open rebuilt the whole
+    // NavigationSplitView graph synchronously — the source of the slow open.
+    static private var existing: SSHHostManagerWindowController?
 
     static func show() {
+        // Pick up any hosts added since (e.g. auto-added from a terminal ssh).
+        SSHHostStore.shared.reload()
         if let existing {
             existing.window?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -21,14 +27,14 @@ final class SSHHostManagerWindowController: NSWindowController {
 
     init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 820, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 980, height: 740),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false)
         window.title = "SSH Hosts"
         window.center()
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 720, height: 440)
+        window.minSize = NSSize(width: 760, height: 520)
 
         super.init(window: window)
         window.contentView = NSHostingView(rootView: SSHHostManagerView())
@@ -71,33 +77,37 @@ struct SSHHostManagerView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        // HSplitView (lightweight AppKit-backed) instead of NavigationSplitView,
+        // whose first instantiation can take seconds on macOS — this is a flat
+        // master/detail UI with no navigation stack, so the heavier control
+        // isn't needed.
+        HSplitView {
             sidebar
-                .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 360)
-        } detail: {
-            if let alias = selection, let host = store.hosts.first(where: { $0.alias == alias }) {
-                SSHHostDetailView(host: host)
-                    .id(alias)
-            } else {
-                VStack(spacing: 8) {
-                    Image(systemName: "network")
-                        .font(.system(size: 36))
-                        .foregroundStyle(.secondary)
-                    Text("Select a host").font(.headline).foregroundStyle(.secondary)
-                    Text("Pick a host on the left, or click + to add.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+                .frame(minWidth: 240, idealWidth: 280, maxWidth: 360)
+            detailPane
+                .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button { showingAdd = true } label: { Image(systemName: "plus") }
-                    .help("Add new SSH host")
-            }
-        }
+        .frame(minWidth: 720, minHeight: 440)
         .sheet(isPresented: $showingAdd) {
             SSHAddHostSheet { selection = $0 }
+        }
+    }
+
+    @ViewBuilder
+    private var detailPane: some View {
+        if let alias = selection, let host = store.hosts.first(where: { $0.alias == alias }) {
+            SSHHostDetailView(host: host)
+                .id(alias)
+        } else {
+            VStack(spacing: 8) {
+                Image(systemName: "network")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.secondary)
+                Text("Select a host").font(.headline).foregroundStyle(.secondary)
+                Text("Pick a host on the left, or click + to add.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -108,6 +118,9 @@ struct SSHHostManagerView: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search", text: $search)
                     .textFieldStyle(.plain)
+                Button { showingAdd = true } label: { Image(systemName: "plus") }
+                    .buttonStyle(.borderless)
+                    .help("Add new SSH host")
             }
             .padding(8)
             .background(Color(nsColor: .controlBackgroundColor))
@@ -116,7 +129,14 @@ struct SSHHostManagerView: View {
                 ForEach(groups, id: \.0) { group, hosts in
                     Section(header: Text(group)) {
                         ForEach(hosts) { host in
-                            SSHHostRow(host: host).tag(host.alias as String?)
+                            SSHHostRow(host: host)
+                                .tag(host.alias as String?)
+                                // Handle clicks explicitly so single vs. double
+                                // are unambiguous and don't fight List's own
+                                // selection gesture: single = show detail,
+                                // double = connect. (count:2 must come first.)
+                                .onTapGesture(count: 2) { store.connect(host) }
+                                .onTapGesture(count: 1) { selection = host.alias }
                         }
                     }
                 }
@@ -150,6 +170,10 @@ private struct SSHHostRow: View {
             }
         }
         .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Make the whole row (including the trailing empty space) clickable;
+        // otherwise only the content area registers selection/double-click.
+        .contentShape(Rectangle())
     }
 }
 
@@ -157,12 +181,14 @@ private struct SSHHostDetailView: View {
     let host: SSHHost
     @ObservedObject private var store = SSHHostStore.shared
     @State private var showingDeleteAlert = false
+    @State private var passwordInput = ""
+    @State private var passwordSaved = false
 
     private var meta: SSHHostMetadata { host.metadata }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 14) {
                 header
 
                 section("Connection") {
@@ -174,6 +200,32 @@ private struct SSHHostDetailView: View {
                     if let j = host.config.proxyJump { LabeledContent("Jump", value: j) }
                 }
                 .help("Connection details are read from ~/.ssh/config. Edit that file directly to change them.")
+
+                section("Authentication") {
+                    if passwordSaved {
+                        Label("Password saved in macOS Keychain", systemImage: "key.fill")
+                            .font(.caption).foregroundStyle(.green)
+                    }
+                    HStack {
+                        SecureField(passwordSaved ? "Replace stored password" : "Password (optional)",
+                                    text: $passwordInput)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Save") {
+                            SSHKeychain.set(password: passwordInput, for: host.alias)
+                            passwordInput = ""
+                            passwordSaved = true
+                        }
+                        .disabled(passwordInput.isEmpty)
+                        if passwordSaved {
+                            Button("Clear") {
+                                SSHKeychain.remove(for: host.alias)
+                                passwordSaved = false
+                            }
+                        }
+                    }
+                    Text("Auto-filled on connect via the Keychain (SSH_ASKPASS). SSH keys are more secure — use this only for password-only hosts.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
 
                 section("Wavetty Metadata") {
                     Toggle("Pinned", isOn: Binding(
@@ -208,7 +260,7 @@ private struct SSHHostDetailView: View {
                             get: { meta.note ?? "" },
                             set: { v in store.updateMetadata(host.alias) { $0.note = v.isEmpty ? nil : v } }
                         ))
-                        .frame(minHeight: 60, maxHeight: 100)
+                        .frame(height: 40)
                         .border(Color(nsColor: .separatorColor))
                     }
                 }
@@ -227,6 +279,7 @@ private struct SSHHostDetailView: View {
             }
             .padding(20)
         }
+        .onAppear { passwordSaved = SSHKeychain.hasPassword(for: host.alias) }
         .alert("Delete \"\(host.alias)\"?", isPresented: $showingDeleteAlert) {
             Button("Delete", role: .destructive) {
                 try? store.removeHost(alias: host.alias)

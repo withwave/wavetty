@@ -68,7 +68,6 @@ struct CommandPaletteView: View {
     var dynamicOptions: ((String) -> [CommandOption])? = nil
     @State private var rawQuery = ""
     @State private var selectedIndex: UInt?
-    @State private var hoveredOptionID: UUID?
 
     var query: String {
         rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -166,8 +165,7 @@ struct CommandPaletteView: View {
             CommandTable(
                 options: filteredOptions,
                 query: query,
-                selectedIndex: $selectedIndex,
-                hoveredOptionID: $hoveredOptionID) { option in
+                selectedIndex: $selectedIndex) { option in
                     isPresented = false
                     option.action()
             }
@@ -298,8 +296,13 @@ private struct CommandTable: View {
     var options: [CommandOption]
     var query: String
     @Binding var selectedIndex: UInt?
-    @Binding var hoveredOptionID: UUID?
     var action: (CommandOption) -> Void
+
+    // Owned here (not in CommandPaletteView) so hover changes during scroll /
+    // mouse-move only re-render the row list — not the entire palette, which
+    // would recompute filteredOptions and re-lay-out the material/shadow chrome
+    // on every hovered row, freezing scroll and click handling.
+    @State private var hoveredOptionID: UUID?
 
     var body: some View {
         if options.isEmpty {

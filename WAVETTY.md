@@ -69,7 +69,28 @@ Anything Wavetty-only lives in a new subdirectory of `macos/Sources/Features/`:
 | Feature | Location |
 |---|---|
 | GitHub Release update checker | `macos/Sources/Features/Update/WavettyUpdateChecker.swift` |
-| SSH host management | `macos/Sources/Features/Hosts/` (5 files) |
+| SSH host management | `macos/Sources/Features/Hosts/` (SSHHostStore, SSHConfigParser, SSHURIParser, SSHHostMetadata, SSHHostManagerView, SSHMenuController, SSHProcessInspector, SSHKeychain, SSHAskpass) |
+| Recent-window session recovery | `macos/Sources/Features/Sessions/SessionHistoryStore.swift` |
+
+**Session recovery** (`SessionHistoryStore`): snapshots open terminal windows
+(tabs + split tree + frame) on a 15s timer, on window close, on resign-key, and
+at termination — so a closed window or a force-killed app can be reopened from
+the Dock menu with its layout and position restored. Entries are deduped by a
+frame-independent content signature and capped to 16 (LRU). SSH leaves are
+detected live (foreground process via `ghostty_surface_pwd`/`KERN_PROCARGS2`) so
+they reconnect on restore. Persisted to `recent-windows.json`. Observes
+`NSWindow.willCloseNotification` etc. globally — **no upstream file edits**.
+
+**SSH auto-detect + Keychain passwords**: `SSHProcessInspector` reads a surface's
+foreground argv via `sysctl(KERN_PROCARGS2)`; a plain `ssh user@host` typed in
+the terminal is auto-added to `~/.ssh/config` and tracked. `SSHKeychain` stores
+per-host passwords in the login Keychain (via the `security` CLI); `SSHAskpass`
+writes a helper script and sets `SSH_ASKPASS`/`SSH_ASKPASS_REQUIRE=force` on
+connect so ssh auto-fills the stored password.
+
+**SSH discoverability**: a code-built top-level **SSH** menu (`SSHMenuController`,
+no xib edit) and an **SSH Hosts** section in the Dock menu list pinned/recent
+hosts for one-click connect, plus "Manage Hosts… ⌘⇧K".
 
 Xcode auto-discovers files via `PBXFileSystemSynchronizedRootGroup`, so no
 `project.pbxproj` edits are required.
@@ -85,8 +106,8 @@ Current Wavetty edits in upstream files:
 
 | File | Wavetty change |
 |---|---|
-| `Sources/App/macOS/AppDelegate.swift` | `WavettyUpdateChecker.checkOnLaunch()` call; `checkForUpdates(_:)` IBAction redirects to it; minor string rewrites ("Quit Ghostty?" → "Quit Wavetty?") |
-| `Sources/Features/Command Palette/CommandPalette.swift` | Added optional `dynamicOptions: ((String) -> [CommandOption])?` parameter to `CommandPaletteView` |
+| `Sources/App/macOS/AppDelegate.swift` | `WavettyUpdateChecker.checkOnLaunch()` call; launch warmups (`SessionHistoryStore`, `SSHMenuController.install()`); `reloadDockMenu()` builds Recent Windows + SSH Hosts sections; `checkForUpdates(_:)` IBAction redirects; string rewrites ("Quit Ghostty?" → "Quit Wavetty?") |
+| `Sources/Features/Command Palette/CommandPalette.swift` | Added optional `dynamicOptions:` parameter to `CommandPaletteView`; moved `hoveredOptionID` into `CommandTable` so hover during scroll doesn't re-evaluate the whole palette body (fixes severe scroll/click lag) |
 | `Sources/Features/Command Palette/TerminalCommandPalette.swift` | `sshDynamicOptions(query:)` method + one call site |
 | `Sources/Features/Terminal/BaseTerminalController.swift` | `lastComputedTitle` default `🌊`, fallback `titleDidChange(to: "🌊")`, bell prefix moved to suffix |
 | `Sources/Features/Terminal/Window Styles/TitlebarTabs{Tahoe,Ventura}TerminalWindow.swift` | default title `"🌊 Wavetty"` |
