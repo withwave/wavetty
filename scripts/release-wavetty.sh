@@ -19,7 +19,7 @@
 # Requires:
 #   * Clean working tree
 #   * `upstream` remote pointing at ghostty-org/ghostty
-#   * `origin` remote pointing at withwave/ghostty
+#   * `origin` remote pointing at withwave/wavetty
 #   * `gh` authenticated to GitHub
 #   * notarytool keychain profile (see RELEASING-WITHWAVE.md)
 
@@ -32,7 +32,7 @@ UPSTREAM_REMOTE="upstream"
 UPSTREAM_BRANCH="main"
 ORIGIN_REMOTE="origin"
 ORIGIN_BRANCH="main"
-GITHUB_REPO="withwave/ghostty"
+GITHUB_REPO="withwave/wavetty"
 
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"

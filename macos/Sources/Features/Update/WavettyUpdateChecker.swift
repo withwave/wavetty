@@ -12,8 +12,8 @@ import Foundation
 /// - Manual: `checkManually()` always shows UI.
 @MainActor
 enum WavettyUpdateChecker {
-    private static let releaseAPI = URL(string: "https://api.github.com/repos/withwave/ghostty/releases/latest")!
-    private static let releasesPage = URL(string: "https://github.com/withwave/ghostty/releases")!
+    private static let releaseAPI = URL(string: "https://api.github.com/repos/withwave/wavetty/releases/latest")!
+    private static let releasesPage = URL(string: "https://github.com/withwave/wavetty/releases")!
     private static let lastCheckKey = "WavettyLastUpdateCheck"
     private static let skipVersionKey = "WavettySkippedVersion"
     private static let checkInterval: TimeInterval = 60 * 60 * 24

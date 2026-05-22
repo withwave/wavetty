@@ -3,8 +3,10 @@ import SwiftUI
 struct AboutView: View {
     @Environment(\.openURL) var openURL
 
-    private let githubURL = URL(string: "https://github.com/withwave/ghostty")
+    private let githubURL = URL(string: "https://github.com/withwave/wavetty")
     private let docsURL = URL(string: "https://ghostty.org/docs")
+    /// Upstream project that Wavetty is forked from.
+    private let ghosttyURL = URL(string: "https://github.com/ghostty-org/ghostty")
 
     /// Read the commit from the bundle.
     private var build: String? { Bundle.main.infoDictionary?["CFBundleVersion"] as? String }
@@ -80,7 +82,7 @@ struct AboutView: View {
 
             VStack(alignment: .center, spacing: 32) {
                 VStack(alignment: .center, spacing: 8) {
-                    Text("Ghostty")
+                    Text("Wavetty")
                         .bold()
                         .font(.title)
                     Text("Fast, native, feature-rich terminal \nemulator pushing modern features.")
@@ -135,6 +137,20 @@ struct AboutView: View {
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: .infinity)
                 }
+
+                // Fork attribution. Ghostty is MIT-licensed; we credit the
+                // upstream project and link to it.
+                VStack(spacing: 4) {
+                    Text("Wavetty is an open-source fork of Ghostty.")
+                    if let url = ghosttyURL {
+                        Link("Ghostty © Mitchell Hashimoto & contributors — MIT", destination: url)
+                    }
+                }
+                .font(.caption2)
+                .multilineTextAlignment(.center)
+                .tint(.secondary)
+                .opacity(0.8)
+                .frame(maxWidth: .infinity)
             }
             .frame(maxWidth: .infinity)
         }
