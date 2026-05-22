@@ -28,7 +28,7 @@ VERSION="$(cat VERSION 2>/dev/null || echo "1.3.2-withwave")"
 SIGNING_IDENTITY="Developer ID Application: MODIN COMPANY (8AC9KUZJ5P)"
 NOTARY_PROFILE="modin-notary"
 ENTITLEMENTS="macos/GhosttyReleaseLocal.entitlements"
-GITHUB_REPO="withwave/ghostty"
+GITHUB_REPO="withwave/wavetty"
 RELEASE_TAG="v1.3.2-withwave"
 
 # Use brew zig@0.15 (patched for Xcode 26.4)

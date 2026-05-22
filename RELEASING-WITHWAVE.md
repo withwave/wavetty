@@ -1,6 +1,6 @@
 # Releasing Wavetty (withwave fork)
 
-withwave/ghostty 포크는 **Wavetty**라는 별개의 앱으로 빌드/배포됩니다. Apple Developer ID 서명 + 공증 + GitHub Release 전체 파이프라인이 `scripts/build-wavetty.sh` 스크립트로 자동화되어 있습니다.
+withwave/wavetty 포크는 **Wavetty**라는 별개의 앱으로 빌드/배포됩니다. Apple Developer ID 서명 + 공증 + GitHub Release 전체 파이프라인이 `scripts/build-wavetty.sh` 스크립트로 자동화되어 있습니다.
 
 ## 결과물
 

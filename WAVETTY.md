@@ -2,7 +2,7 @@
 
 This document is a working guide for anyone (humans or AI agents) extending
 Wavetty, a fork of [Ghostty](https://github.com/ghostty-org/ghostty) maintained
-at [withwave/ghostty](https://github.com/withwave/ghostty).
+at [withwave/wavetty](https://github.com/withwave/wavetty).
 
 Read this **before** writing code, and re-read it any time upstream rebases
 land. The release pipeline encodes the conventions described here; breaking
@@ -12,7 +12,7 @@ them silently breaks rebases or releases.
 
 ## 1. What Wavetty is
 
-A standalone macOS terminal that ships from `withwave/ghostty:main`. The Zig
+A standalone macOS terminal that ships from `withwave/wavetty:main`. The Zig
 terminal engine and Linux GTK app are inherited verbatim from upstream; only
 the macOS app is rebranded and extended.
 
@@ -177,7 +177,7 @@ Source files patched in-place during build (and restored on exit via `trap`):
 
 File: `macos/Sources/Features/Update/WavettyUpdateChecker.swift`
 
-- Polls `GET https://api.github.com/repos/withwave/ghostty/releases/latest`
+- Polls `GET https://api.github.com/repos/withwave/wavetty/releases/latest`
 - Compares `tag_name` (stripping `v` prefix and `-withwave` suffix for the
   semver portion) against `CFBundleShortVersionString`
 - `checkOnLaunch()`: silent check on app start, throttled to once per 24h via
@@ -395,7 +395,7 @@ As of the latest commit:
 
 - **Version**: see `VERSION` file
 - **Bundle ID**: `com.modincompany.wavetty`
-- **Latest release**: see `gh release view --repo withwave/ghostty`
+- **Latest release**: see `gh release view --repo withwave/wavetty`
 - **Active features**: rebrand, custom icon, GitHub Release update checker,
   SSH host management (palette + manager window), end-to-end release script
 
