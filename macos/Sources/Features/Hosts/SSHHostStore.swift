@@ -203,16 +203,42 @@ final class SSHHostStore: ObservableObject {
     /// Opens a new tab (or new window) running `ssh <alias>` directly as
     /// the surface's command.
     func connect(_ host: SSHHost) {
-        guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+        _ = open(host, inNewWindow: false)
+    }
+
+    /// Opens `ssh <alias>` as a surface command, in a new tab or a new window.
+    /// Returns the controller so callers can position the window. Records the
+    /// connection and registers the window as an SSH window for frame tracking.
+    @discardableResult
+    func open(_ host: SSHHost, inNewWindow: Bool) -> TerminalController? {
+        guard let appDelegate = NSApp.delegate as? AppDelegate else { return nil }
         var config = Ghostty.SurfaceConfiguration()
         config.command = "ssh \(host.alias)"
         config.waitAfterCommand = true
 
-        let parent = NSApp.keyWindow
-        if TerminalController.newTab(appDelegate.ghostty, from: parent, withBaseConfig: config) == nil {
-            _ = TerminalController.newWindow(appDelegate.ghostty, withBaseConfig: config, withParent: parent)
+        // If a password is stored for this host, set up Keychain-backed
+        // SSH_ASKPASS so ssh auto-fills it.
+        if let env = SSHAskpass.environment(for: host.alias) {
+            for (key, value) in env { config.environmentVariables[key] = value }
         }
+
+        let parent = NSApp.keyWindow
+        let controller: TerminalController?
+        if inNewWindow {
+            controller = TerminalController.newWindow(appDelegate.ghostty, withBaseConfig: config, withParent: parent)
+        } else if let tab = TerminalController.newTab(appDelegate.ghostty, from: parent, withBaseConfig: config) {
+            controller = tab
+        } else {
+            controller = TerminalController.newWindow(appDelegate.ghostty, withBaseConfig: config, withParent: parent)
+        }
+
         recordConnection(host.alias)
+        // Capture the session shortly after the ssh process is up so a quick
+        // force-kill still records it (the periodic sweep also covers this).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            SessionHistoryStore.shared.captureNow()
+        }
+        return controller
     }
 
     /// Convenience: connect by alias string. Returns true if connected.
@@ -221,6 +247,13 @@ final class SSHHostStore: ObservableObject {
         guard let host = hosts.first(where: { $0.alias == alias }) else { return false }
         connect(host)
         return true
+    }
+
+    /// Open by alias in a new window. Returns the controller, or nil if the
+    /// alias is unknown.
+    func open(alias: String, inNewWindow: Bool) -> TerminalController? {
+        guard let host = hosts.first(where: { $0.alias == alias }) else { return nil }
+        return open(host, inNewWindow: inNewWindow)
     }
 
     /// Connect from a freeform URI: reuse existing host if found, otherwise add new.
