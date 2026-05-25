@@ -295,6 +295,40 @@ final class SessionHistoryStore: ObservableObject {
         Self.save(recentWindows)
     }
 
+    /// Migrates every ssh leaf in the saved windows from one alias to another,
+    /// used when the user renames a host in the SSH manager.
+    func renameSSH(from oldAlias: String, to newAlias: String) {
+        guard oldAlias != newAlias else { return }
+        var changed = false
+        recentWindows = recentWindows.map { window in
+            var updated = window
+            updated.tabs = window.tabs.map { tab in
+                var t = tab
+                let (root, didChange) = Self.renameLeaves(t.root, from: oldAlias, to: newAlias)
+                t.root = root
+                if didChange { changed = true }
+                return t
+            }
+            return updated
+        }
+        if changed { Self.save(recentWindows) }
+    }
+
+    private static func renameLeaves(_ node: SessionNode, from old: String, to new: String) -> (SessionNode, Bool) {
+        switch node {
+        case .leaf(var leaf):
+            if leaf.sshAlias == old {
+                leaf.sshAlias = new
+                return (.leaf(leaf), true)
+            }
+            return (.leaf(leaf), false)
+        case .split(let direction, let ratio, let left, let right):
+            let (l, lc) = renameLeaves(left, from: old, to: new)
+            let (r, rc) = renameLeaves(right, from: old, to: new)
+            return (.split(direction: direction, ratio: ratio, left: l, right: r), lc || rc)
+        }
+    }
+
     // MARK: - Restore
 
     /// Reopens a window restored to its last position/size, rebuilding every

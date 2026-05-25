@@ -198,6 +198,59 @@ final class SSHHostStore: ObservableObject {
         reload()
     }
 
+    /// Renames a host: rewrites its `~/.ssh/config` block under a new alias and
+    /// migrates Wavetty metadata, any stored Keychain password, and ssh entries
+    /// in the recent-windows history.
+    func renameHost(from oldAlias: String, to newAlias: String) throws {
+        guard oldAlias != newAlias else { return }
+        guard !newAlias.isEmpty, newAlias.allSatisfy({ $0.isLetter || $0.isNumber || "._-".contains($0) }) else {
+            throw NSError(domain: "Wavetty.SSH", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Invalid alias: only letters, digits, '.', '_', '-'"])
+        }
+        guard !hosts.contains(where: { $0.alias == newAlias }) else {
+            throw NSError(domain: "Wavetty.SSH", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "Alias '\(newAlias)' already exists"])
+        }
+        guard let existing = configEntries.first(where: { $0.alias == oldAlias }) else {
+            throw NSError(domain: "Wavetty.SSH", code: 4,
+                          userInfo: [NSLocalizedDescriptionKey: "Host '\(oldAlias)' not found"])
+        }
+
+        // Migrate any stored keychain password to the new alias (preserve
+        // before deleting the old config block / metadata).
+        let storedPassword = SSHKeychain.password(for: oldAlias)
+
+        // Rewrite the config: remove old block, append a new one with the
+        // same fields but under the new alias.
+        try SSHConfigParser.removeHost(alias: oldAlias)
+        let renamed = SSHConfigEntry(
+            alias: newAlias,
+            hostName: existing.hostName,
+            user: existing.user,
+            port: existing.port,
+            identityFile: existing.identityFile,
+            proxyJump: existing.proxyJump)
+        try SSHConfigParser.appendHost(renamed)
+
+        // Move metadata.
+        if let m = metadata.removeValue(forKey: oldAlias) {
+            metadata[newAlias] = m
+        }
+        SSHHostMetadataStore.save(metadata)
+
+        // Move keychain password.
+        if let pw = storedPassword {
+            SSHKeychain.set(password: pw, for: newAlias)
+            SSHKeychain.remove(for: oldAlias)
+        }
+
+        // Update any ssh leaves in the session history that point to the old
+        // alias so recent-window restore continues to work.
+        SessionHistoryStore.shared.renameSSH(from: oldAlias, to: newAlias)
+
+        reload()
+    }
+
     // MARK: - Connect
 
     /// Opens a new tab (or new window) running `ssh <alias>` directly as

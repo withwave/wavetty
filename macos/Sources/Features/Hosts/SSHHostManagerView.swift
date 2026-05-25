@@ -96,7 +96,7 @@ struct SSHHostManagerView: View {
     @ViewBuilder
     private var detailPane: some View {
         if let alias = selection, let host = store.hosts.first(where: { $0.alias == alias }) {
-            SSHHostDetailView(host: host)
+            SSHHostDetailView(host: host, onRename: { newAlias in selection = newAlias })
                 .id(alias)
         } else {
             VStack(spacing: 8) {
@@ -179,10 +179,13 @@ private struct SSHHostRow: View {
 
 private struct SSHHostDetailView: View {
     let host: SSHHost
+    var onRename: ((String) -> Void)? = nil
     @ObservedObject private var store = SSHHostStore.shared
     @State private var showingDeleteAlert = false
     @State private var passwordInput = ""
     @State private var passwordSaved = false
+    @State private var aliasDraft = ""
+    @State private var aliasError: String? = nil
 
     private var meta: SSHHostMetadata { host.metadata }
 
@@ -192,14 +195,26 @@ private struct SSHHostDetailView: View {
                 header
 
                 section("Connection") {
-                    LabeledContent("Alias", value: host.alias)
+                    HStack(alignment: .center) {
+                        Text("Alias").frame(width: 80, alignment: .trailing).foregroundStyle(.secondary)
+                        TextField("alias", text: $aliasDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit { commitRename() }
+                        if aliasDraft != host.alias && !aliasDraft.isEmpty {
+                            Button("Rename") { commitRename() }
+                                .keyboardShortcut(.defaultAction)
+                        }
+                    }
+                    if let aliasError {
+                        Text(aliasError).font(.caption).foregroundStyle(.red)
+                    }
                     LabeledContent("Host", value: host.config.hostName ?? host.alias)
                     if let u = host.config.user { LabeledContent("User", value: u) }
                     LabeledContent("Port", value: "\(host.config.port ?? 22)")
                     if let k = host.config.identityFile { LabeledContent("Identity", value: k) }
                     if let j = host.config.proxyJump { LabeledContent("Jump", value: j) }
                 }
-                .help("Connection details are read from ~/.ssh/config. Edit that file directly to change them.")
+                .help("Alias is editable here. Other connection details come from ~/.ssh/config — edit that file to change them.")
 
                 section("Authentication") {
                     if passwordSaved {
@@ -279,7 +294,11 @@ private struct SSHHostDetailView: View {
             }
             .padding(20)
         }
-        .onAppear { passwordSaved = SSHKeychain.hasPassword(for: host.alias) }
+        .onAppear {
+            passwordSaved = SSHKeychain.hasPassword(for: host.alias)
+            aliasDraft = host.alias
+            aliasError = nil
+        }
         .alert("Delete \"\(host.alias)\"?", isPresented: $showingDeleteAlert) {
             Button("Delete", role: .destructive) {
                 try? store.removeHost(alias: host.alias)
@@ -322,6 +341,21 @@ private struct SSHHostDetailView: View {
             }
         }
         .padding(.top, 6)
+    }
+
+    private func commitRename() {
+        let newAlias = aliasDraft.trimmingCharacters(in: .whitespaces)
+        guard newAlias != host.alias else { aliasError = nil; return }
+        guard !newAlias.isEmpty else { aliasError = "Alias is required"; return }
+        do {
+            try store.renameHost(from: host.alias, to: newAlias)
+            aliasError = nil
+            // Tell the parent to point its selection at the new alias so the
+            // detail view (which is keyed by .id(alias)) follows the rename.
+            onRename?(newAlias)
+        } catch {
+            aliasError = error.localizedDescription
+        }
     }
 
     @ViewBuilder
