@@ -1144,20 +1144,25 @@ extension Ghostty {
             // active, fall through to interpretKeyEvents so the IME can
             // commit the pending hangul and swallow this press — matching
             // Apple Terminal's "first press commits, second press fires"
-            // behavior. ghostty_surface_key under CJK IME silently
-            // swallows the input despite returning success (verified by
-            // logs), so we inject the byte as raw text input via the
-            // paste path, which is known to reach the PTY.
+            // behavior.
+            //
+            // We pass the BASE LETTER as key_ev.text (e.g. "c" for Ctrl+C,
+            // "j" for Ctrl+J) plus the control modifier, exactly like the
+            // non-IME flow does. libghostty then encodes Ctrl+letter →
+            // ASCII control byte itself. We avoid `ghostty_surface_text`
+            // (the paste path) because bracketed-paste mode would wrap
+            // 0x03 into literal text, making Ctrl+C show as a space in
+            // the shell instead of sending SIGINT.
             if event.modifierFlags.contains(.control),
                !event.modifierFlags.contains(.command),
                !event.modifierFlags.contains(.option),
                markedText.length == 0,
-               let controlByte = Ghostty.SurfaceView.controlByte(forKeyCode: event.keyCode) {
-                var byte = controlByte
-                withUnsafePointer(to: &byte) { p in
-                    p.withMemoryRebound(to: CChar.self, capacity: 1) { cptr in
-                        ghostty_surface_text(surface, cptr, 1)
-                    }
+               let letter = Ghostty.SurfaceView.ctrlKeyText(forKeyCode: event.keyCode) {
+                var key_ev = event.ghosttyKeyEvent(action, translationMods: translationEvent.modifierFlags)
+                key_ev.composing = false
+                letter.withCString { ptr in
+                    key_ev.text = ptr
+                    _ = ghostty_surface_key(surface, key_ev)
                 }
                 return
             }
@@ -2188,43 +2193,44 @@ extension Ghostty.SurfaceView: NSTextInputClient {
         }
     }
 
-    /// Wavetty: physical macOS virtual keyCode → ASCII control byte that the
-    /// terminal expects when Control is held. Used to bypass CJK IMEs that
-    /// otherwise eat all Ctrl+<key> combinations.
-    static func controlByte(forKeyCode keyCode: UInt16) -> UInt8? {
+    /// Wavetty: physical macOS virtual keyCode → the base key as a string,
+    /// for Ctrl+<key> combinations. We pass this to libghostty as the key
+    /// event text; libghostty then encodes Ctrl+letter as the ASCII control
+    /// byte (the same encoding path the non-IME flow uses). Required because
+    /// AppKit blanks `event.characters` for control-modified keys while a
+    /// CJK input source is active.
+    static func ctrlKeyText(forKeyCode keyCode: UInt16) -> String? {
         switch keyCode {
-        // Ctrl+letter → ASCII 0x01–0x1A
-        case 0:  return 0x01  // A — SOH
-        case 11: return 0x02  // B — STX
-        case 8:  return 0x03  // C — ETX (^C)
-        case 2:  return 0x04  // D — EOT (^D)
-        case 14: return 0x05  // E — ENQ
-        case 3:  return 0x06  // F — ACK
-        case 5:  return 0x07  // G — BEL
-        case 4:  return 0x08  // H — BS  (^H)
-        case 34: return 0x09  // I — HT  (Tab)
-        case 38: return 0x0A  // J — LF  (^J)
-        case 40: return 0x0B  // K — VT
-        case 37: return 0x0C  // L — FF  (clear)
-        case 46: return 0x0D  // M — CR
-        case 45: return 0x0E  // N — SO
-        case 31: return 0x0F  // O — SI
-        case 35: return 0x10  // P — DLE
-        case 12: return 0x11  // Q — DC1
-        case 15: return 0x12  // R — DC2
-        case 1:  return 0x13  // S — DC3
-        case 17: return 0x14  // T — DC4
-        case 32: return 0x15  // U — NAK
-        case 9:  return 0x16  // V — SYN
-        case 13: return 0x17  // W — ETB
-        case 7:  return 0x18  // X — CAN
-        case 16: return 0x19  // Y — EM
-        case 6:  return 0x1A  // Z — SUB (^Z)
-        // Ctrl+symbol
-        case 49: return 0x00  // Space — NUL
-        case 33: return 0x1B  // [ — ESC
-        case 42: return 0x1C  // \ — FS
-        case 30: return 0x1D  // ] — GS
+        case 0:  return "a"
+        case 11: return "b"
+        case 8:  return "c"
+        case 2:  return "d"
+        case 14: return "e"
+        case 3:  return "f"
+        case 5:  return "g"
+        case 4:  return "h"
+        case 34: return "i"
+        case 38: return "j"
+        case 40: return "k"
+        case 37: return "l"
+        case 46: return "m"
+        case 45: return "n"
+        case 31: return "o"
+        case 35: return "p"
+        case 12: return "q"
+        case 15: return "r"
+        case 1:  return "s"
+        case 17: return "t"
+        case 32: return "u"
+        case 9:  return "v"
+        case 13: return "w"
+        case 7:  return "x"
+        case 16: return "y"
+        case 6:  return "z"
+        case 49: return " "    // Ctrl+Space → NUL
+        case 33: return "["    // Ctrl+[    → ESC
+        case 42: return "\\"   // Ctrl+\    → FS
+        case 30: return "]"    // Ctrl+]    → GS
         default: return nil
         }
     }
