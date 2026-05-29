@@ -1285,19 +1285,25 @@ pub const ReadThread = struct {
         };
         defer crash.sentry.thread_state = null;
 
-        // Wavetty: we deliberately do NOT set the PTY master to O_NONBLOCK.
-        //
-        // On macOS, marking the PTY master non-blocking also causes the
-        // *slave* side to report writes as non-blocking. A child that writes
-        // a chunk larger than the kernel PTY buffer (e.g. a CLI dumping a
-        // big help screen, or Node.js writing synchronously to its TTY) then
-        // gets EAGAIN mid-write and resumes with a partial write. If that
-        // partial boundary lands inside a multi-byte UTF-8 sequence (e.g. a
-        // 3-byte Hangul syllable) the child's runtime can emit U+FFFD for the
-        // split fragment — corrupting output that ghostty then faithfully
-        // displays. Apple Terminal keeps the master blocking and never
-        // triggers this. We keep the master blocking and gate reads with
-        // poll() so the slave write blocks (and stays intact) instead.
+        // First thing, we want to set the fd to non-blocking. We do this
+        // so that we can try to read from the fd in a tight loop and only
+        // check the quit fd occasionally.
+        if (posix.fcntl(fd, posix.F.GETFL, 0)) |flags| {
+            _ = posix.fcntl(
+                fd,
+                posix.F.SETFL,
+                flags | @as(u32, @bitCast(posix.O{ .NONBLOCK = true })),
+            ) catch |err| {
+                log.warn("read thread failed to set flags err={}", .{err});
+                log.warn("this isn't a fatal error, but may cause performance issues", .{});
+            };
+        } else |err| {
+            log.warn("read thread failed to get flags err={}", .{err});
+            log.warn("this isn't a fatal error, but may cause performance issues", .{});
+        }
+
+        // Build up the list of fds we're going to poll. We are looking
+        // for data on the pty and our quit notification.
         var pollfds: [2]posix.pollfd = .{
             .{ .fd = fd, .events = posix.POLL.IN, .revents = undefined },
             .{ .fd = quit, .events = posix.POLL.IN, .revents = undefined },
@@ -1305,7 +1311,44 @@ pub const ReadThread = struct {
 
         var buf: [1024]u8 = undefined;
         while (true) {
-            // Block until there's data on the pty or a quit signal.
+            // We try to read from the file descriptor as long as possible
+            // to maximize performance. We only check the quit fd if the
+            // main fd blocks. This optimizes for the realistic scenario that
+            // the data will eventually stop while we're trying to quit. This
+            // is always true because we kill the process.
+            while (true) {
+                const n = posix.read(fd, &buf) catch |err| {
+                    switch (err) {
+                        // This means our pty is closed. We're probably
+                        // gracefully shutting down.
+                        error.NotOpenForReading,
+                        error.InputOutput,
+                        => {
+                            log.info("io reader exiting", .{});
+                            return;
+                        },
+
+                        // No more data, fall back to poll and check for
+                        // exit conditions.
+                        error.WouldBlock => break,
+
+                        else => {
+                            log.err("io reader error err={}", .{err});
+                            unreachable;
+                        },
+                    }
+                };
+
+                // This happens on macOS instead of WouldBlock when the
+                // child process dies. To be safe, we just break the loop
+                // and let our poll happen.
+                if (n == 0) break;
+
+                // log.info("DATA: {d}", .{n});
+                @call(.always_inline, termio.Termio.processOutput, .{ io, buf[0..n] });
+            }
+
+            // Wait for data.
             _ = posix.poll(&pollfds, -1) catch |err| {
                 log.warn("poll failed on read thread, exiting early err={}", .{err});
                 return;
@@ -1317,32 +1360,8 @@ pub const ReadThread = struct {
                 return;
             }
 
-            // Drain available data. Since the fd is blocking we read once per
-            // poll-ready signal; poll() already told us data is available so
-            // this read returns promptly without blocking.
-            if (pollfds[0].revents & posix.POLL.IN != 0) {
-                const n = posix.read(fd, &buf) catch |err| switch (err) {
-                    // Pty closed; gracefully shutting down.
-                    error.NotOpenForReading,
-                    error.InputOutput,
-                    => {
-                        log.info("io reader exiting", .{});
-                        return;
-                    },
-                    // Spurious readiness; loop back to poll.
-                    error.WouldBlock => continue,
-                    else => {
-                        log.err("io reader error err={}", .{err});
-                        unreachable;
-                    },
-                };
-
-                if (n > 0) {
-                    @call(.always_inline, termio.Termio.processOutput, .{ io, buf[0..n] });
-                }
-            }
-
-            // If our pty fd is closed, then we're also done.
+            // If our pty fd is closed, then we're also done with our
+            // read thread.
             if (pollfds[0].revents & posix.POLL.HUP != 0) {
                 log.info("pty fd closed, read thread exiting", .{});
                 return;
