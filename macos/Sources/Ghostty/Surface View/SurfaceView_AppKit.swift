@@ -1199,13 +1199,20 @@ extension Ghostty {
                     return
                 }
 
+                // Wavetty: terminal-essential control codes (Tab/LF/CR/ESC)
+                // must be sent with composing=false even if the IME was
+                // composing — otherwise libghostty treats them as preedit
+                // input and the key never reaches the PTY.
+                let effectiveComposing = composing &&
+                    !Ghostty.SurfaceView.isTerminalControlPassthrough(event.characters)
+
                 // We have no accumulated text so this is a normal key event.
                 _ = keyAction(
                     action,
                     event: event,
                     translationEvent: translationEvent,
                     text: translationEvent.ghosttyCharacters,
-                    composing: composing
+                    composing: effectiveComposing
                 )
             }
         }
@@ -1440,6 +1447,12 @@ extension Ghostty {
         }
 
         private func shouldReplayCommittedPreeditKey(_ event: NSEvent) -> Bool {
+            // Wavetty: terminal-essential control codes (Tab/LF/CR/ESC) must
+            // be replayed after the IME commits preedit, otherwise pressing
+            // Ctrl+J / Enter / Tab / Esc in Hangul mode is silently swallowed.
+            if Ghostty.SurfaceView.isTerminalControlPassthrough(event.characters) {
+                return true
+            }
             guard let key = Ghostty.Input.Key(keyCode: event.keyCode) else { return false }
             switch key {
             case .arrowDown, .arrowRight, .arrowUp:
@@ -2156,19 +2169,29 @@ extension Ghostty.SurfaceView: NSTextInputClient {
               scalars.index(after: scalars.startIndex) == scalars.endIndex else {
             return false
         }
-        // Wavetty: never suppress universal terminal control codes during IME
-        // composition — Korean/CJK IMEs don't use these as composition commands,
-        // but the upstream blanket suppression breaks Ctrl+J/Enter/Tab/Esc for
-        // users typing in Hangul mode.
-        //   0x09 = HT  (Tab)
-        //   0x0A = LF  (Ctrl+J, line feed)
-        //   0x0D = CR  (Enter / Ctrl+M)
-        //   0x1B = ESC
-        switch scalar.value {
-        case 0x09, 0x0A, 0x0D, 0x1B: return false
-        default: break
-        }
+        // Wavetty: universal terminal control codes (Tab/LF/CR/ESC) are not
+        // composition commands for any CJK IME and must always reach the PTY.
+        if Ghostty.SurfaceView.isTerminalControlPassthrough(text) { return false }
         return scalar.value < 0x20
+    }
+
+    /// Wavetty: True when `text` is one of the universal terminal control
+    /// codes that should always reach the PTY even during IME composition —
+    /// Tab (0x09), LF/Ctrl+J (0x0A), CR/Enter (0x0D), ESC (0x1B). Used to:
+    ///   (a) bypass `shouldSuppressComposingControlInput`,
+    ///   (b) force `composing=false` so libghostty actually emits the key,
+    ///   (c) replay these keys after the IME commits preedit text.
+    static func isTerminalControlPassthrough(_ text: String?) -> Bool {
+        guard let text else { return false }
+        let scalars = text.unicodeScalars
+        guard let scalar = scalars.first,
+              scalars.index(after: scalars.startIndex) == scalars.endIndex else {
+            return false
+        }
+        switch scalar.value {
+        case 0x09, 0x0A, 0x0D, 0x1B: return true
+        default: return false
+        }
     }
 }
 
