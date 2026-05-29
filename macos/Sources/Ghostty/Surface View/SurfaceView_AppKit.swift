@@ -2156,6 +2156,18 @@ extension Ghostty.SurfaceView: NSTextInputClient {
               scalars.index(after: scalars.startIndex) == scalars.endIndex else {
             return false
         }
+        // Wavetty: never suppress universal terminal control codes during IME
+        // composition — Korean/CJK IMEs don't use these as composition commands,
+        // but the upstream blanket suppression breaks Ctrl+J/Enter/Tab/Esc for
+        // users typing in Hangul mode.
+        //   0x09 = HT  (Tab)
+        //   0x0A = LF  (Ctrl+J, line feed)
+        //   0x0D = CR  (Enter / Ctrl+M)
+        //   0x1B = ESC
+        switch scalar.value {
+        case 0x09, 0x0A, 0x0D, 0x1B: return false
+        default: break
+        }
         return scalar.value < 0x20
     }
 }
