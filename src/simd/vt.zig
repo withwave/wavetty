@@ -22,10 +22,18 @@ pub fn utf8DecodeUntilControlSeq(
 ) DecodeResult {
     assert(output.len >= input.len);
 
-    // Wavetty diagnostic: force the scalar (Zig) decoder to isolate the
-    // suspected Korean wide-character corruption bug in the SIMD/C++ path
-    // (vt.cpp + simdutf). If this build no longer corrupts wide chars at
-    // PTY-chunk boundaries, the bug is confirmed to live in the SIMD path.
+    if (comptime options.simd) {
+        var decoded: usize = 0;
+        const consumed = ghostty_simd_decode_utf8_until_control_seq(
+            input.ptr,
+            input.len,
+            output.ptr,
+            &decoded,
+        );
+
+        return .{ .consumed = consumed, .decoded = decoded };
+    }
+
     return utf8DecodeUntilControlSeqScalar(input, output);
 }
 
