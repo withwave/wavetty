@@ -689,13 +689,22 @@ fn processOutputLocked(self: *Termio, buf: []const u8) void {
             self.terminal_stream.next(byte);
         }
     } else {
-        // Wavetty diag: log each PTY read's length and boundary bytes so we
-        // can correlate U+FFFD prints with read-chunk boundaries splitting
-        // multi-byte UTF-8 sequences.
+        // Wavetty diag: detect whether the raw PTY read buffer ALREADY
+        // contains U+FFFD (ef bf bd) bytes before ghostty decodes anything.
+        // If so, the corruption arrived over the PTY — not from our decoder.
         {
-            const head = buf[0..@min(buf.len, 8)];
-            const tail = buf[buf.len -| 8 ..];
-            std.log.err("WAVETTY-READ len={d} head={x} tail={x}", .{ buf.len, head, tail });
+            var fffd_count: usize = 0;
+            if (buf.len >= 3) {
+                var idx: usize = 0;
+                while (idx + 2 < buf.len) : (idx += 1) {
+                    if (buf[idx] == 0xef and buf[idx + 1] == 0xbf and buf[idx + 2] == 0xbd) {
+                        fffd_count += 1;
+                    }
+                }
+            }
+            if (fffd_count > 0) {
+                std.log.err("WAVETTY-RAWFFFD count={d} in PTY read of len={d}", .{ fffd_count, buf.len });
+            }
         }
         self.terminal_stream.nextSlice(buf);
     }
