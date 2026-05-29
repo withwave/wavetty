@@ -1140,17 +1140,19 @@ extension Ghostty {
             // to its ASCII control byte ourselves, and hand it to libghostty
             // with key_ev.text pinned to that byte. We require pure Control
             // (no Command / Option, since those have separate encodings).
+            // Bypass only when there is NO active preedit. With preedit
+            // active, fall through to interpretKeyEvents so the IME can
+            // commit the pending hangul and swallow this press — matching
+            // Apple Terminal's "first press commits, second press fires"
+            // behavior. ghostty_surface_key under CJK IME silently
+            // swallows the input despite returning success (verified by
+            // logs), so we inject the byte as raw text input via the
+            // paste path, which is known to reach the PTY.
             if event.modifierFlags.contains(.control),
                !event.modifierFlags.contains(.command),
                !event.modifierFlags.contains(.option),
+               markedText.length == 0,
                let controlByte = Ghostty.SurfaceView.controlByte(forKeyCode: event.keyCode) {
-                // ghostty_surface_key under CJK IME silently swallows the
-                // input despite returning success (verified by logs). Skip
-                // the key-encoding path entirely and inject the byte as
-                // raw text input — same path paste uses, which is known to
-                // reach the PTY.
-                NSLog("[WAVETTY-IME] bypass kc=%d ctrl=0x%02x → ghostty_surface_text",
-                      Int(event.keyCode), controlByte)
                 var byte = controlByte
                 withUnsafePointer(to: &byte) { p in
                     p.withMemoryRebound(to: CChar.self, capacity: 1) { cptr in
