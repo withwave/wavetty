@@ -435,7 +435,20 @@ pub fn queueWrite(
         const slice = slice: {
             // The maximum end index is either the end of our data or
             // the end of our buffer, whichever is smaller.
-            const max = @min(data.len, i + buf.len);
+            var max = @min(data.len, i + buf.len);
+
+            // Wavetty: if this chunk doesn't reach the end of the data and
+            // its boundary falls inside a multi-byte UTF-8 sequence, pull the
+            // boundary back to the start of that sequence so we never split a
+            // codepoint across two pty writes. The remaining bytes go in the
+            // next chunk. (data[max] being a continuation byte 0x80-0xBF means
+            // max is mid-character.)
+            if (max < data.len) {
+                while (max > i and (data[max] & 0xC0) == 0x80) max -= 1;
+                // Degenerate guard: a single codepoint larger than the buffer
+                // can't be aligned; fall back to the unaligned boundary.
+                if (max == i) max = @min(data.len, i + buf.len);
+            }
 
             // Fast
             if (!linefeed) {
@@ -523,7 +536,18 @@ pub const ThreadData = struct {
     write_req_pool: SegmentedPool(xev.WriteRequest, WRITE_REQ_PREALLOC) = .{},
 
     /// The pool of available buffers for writing to the pty.
-    write_buf_pool: SegmentedPool([64]u8, WRITE_REQ_PREALLOC) = .{},
+    ///
+    /// Wavetty: enlarged from upstream's 64 bytes to 4096. queueWrite chunks
+    /// input into buffers of this size and writes each chunk to the pty
+    /// separately, so a paste larger than the buffer is delivered to the
+    /// child in multiple writes. With a tiny 64-byte buffer those write
+    /// boundaries frequently land inside multi-byte UTF-8 sequences (e.g. a
+    /// 3-byte Hangul syllable or box-drawing glyph); a child reading stdin
+    /// in chunk-sized reads and decoding each chunk independently then
+    /// corrupts the split character into U+FFFD. A larger buffer plus
+    /// UTF-8-boundary-aligned chunking (see queueWrite) keeps pasted
+    /// multi-byte text intact for every program, not just well-behaved ones.
+    write_buf_pool: SegmentedPool([4096]u8, WRITE_REQ_PREALLOC) = .{},
 
     /// The write queue for the data stream.
     write_queue: xev.WriteQueue = .{},
