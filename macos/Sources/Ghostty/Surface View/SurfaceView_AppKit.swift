@@ -1158,12 +1158,30 @@ extension Ghostty {
                !event.modifierFlags.contains(.option),
                markedText.length == 0,
                let letter = Ghostty.SurfaceView.ctrlKeyText(forKeyCode: event.keyCode) {
-                var key_ev = event.ghosttyKeyEvent(action, translationMods: translationEvent.modifierFlags)
+                // Construct the key event MANUALLY rather than via
+                // event.ghosttyKeyEvent — under CJK IME, AppKit blanks
+                // event.characters AND characters(byApplyingModifiers:),
+                // so the upstream helper produces unshifted_codepoint=0,
+                // which libghostty refuses to encode. Setting every field
+                // ourselves (including the base letter codepoint) makes
+                // the surface_key path work the same as it does in the
+                // non-IME flow.
+                var key_ev = ghostty_input_key_s()
+                key_ev.action = action
+                key_ev.keycode = UInt32(event.keyCode)
+                key_ev.mods = Ghostty.ghosttyMods(event.modifierFlags)
+                key_ev.consumed_mods = Ghostty.ghosttyMods(
+                    translationEvent.modifierFlags.subtracting([.control, .command]))
                 key_ev.composing = false
-                letter.withCString { ptr in
-                    key_ev.text = ptr
-                    _ = ghostty_surface_key(surface, key_ev)
+                if let scalar = letter.unicodeScalars.first {
+                    key_ev.unshifted_codepoint = scalar.value
                 }
+                let result = letter.withCString { ptr -> Bool in
+                    key_ev.text = ptr
+                    return ghostty_surface_key(surface, key_ev)
+                }
+                NSLog("[WAVETTY-IME] surface_key kc=%d letter=%@ → %d",
+                      Int(event.keyCode), letter as NSString, result ? 1 : 0)
                 return
             }
 
