@@ -521,20 +521,6 @@ pub fn Stream(comptime H: type) type {
             // up to that point are just UTF-8.
             while (self.parser.state == .ground and offset < input.len) {
                 const res = simd.vt.utf8DecodeUntilControlSeq(input[offset..], cp_buf);
-                // Wavetty diag: if this batch produced any FFFD, dump the exact
-                // input slice that was fed to the bulk decoder so we can see
-                // the byte context of the corruption.
-                var diag_has_fffd = false;
-                for (cp_buf[0..res.decoded]) |cp| {
-                    if (cp == 0xFFFD) diag_has_fffd = true;
-                }
-                if (diag_has_fffd) {
-                    const slice = input[offset..];
-                    const dump = slice[0..@min(slice.len, 64)];
-                    std.log.err("WAVETTY-CHUNK inlen={d} consumed={d} decoded={d} bytes={x}", .{
-                        slice.len, res.consumed, res.decoded, dump,
-                    });
-                }
                 for (cp_buf[0..res.decoded]) |cp| {
                     if (cp <= 0xF) {
                         self.execute(@intCast(cp));
@@ -613,9 +599,6 @@ pub fn Stream(comptime H: type) type {
             const res = self.utf8decoder.next(c);
             const consumed = res[1];
             if (res[0]) |codepoint| {
-                if (codepoint == 0xFFFD) {
-                    std.log.err("WAVETTY-FFFD scalar byte=0x{x:0>2} consumed={}", .{ c, consumed });
-                }
                 self.handleCodepoint(codepoint);
             }
             if (!consumed) {

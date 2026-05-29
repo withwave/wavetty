@@ -1309,7 +1309,14 @@ pub const ReadThread = struct {
             .{ .fd = quit, .events = posix.POLL.IN, .revents = undefined },
         };
 
-        var buf: [1024]u8 = undefined;
+        // Wavetty: larger read buffer to drain the PTY faster. With the
+        // upstream 1024-byte buffer, a program writing synchronously to its
+        // TTY (e.g. Node.js) can fill the kernel PTY buffer while we're busy
+        // decoding+rendering the previous chunk, applying write backpressure.
+        // Some programs corrupt multi-byte UTF-8 at those partial-write
+        // boundaries (emitting U+FFFD). Reading larger chunks keeps the PTY
+        // drained and avoids triggering that.
+        var buf: [65536]u8 = undefined;
         while (true) {
             // We try to read from the file descriptor as long as possible
             // to maximize performance. We only check the quit fd if the
