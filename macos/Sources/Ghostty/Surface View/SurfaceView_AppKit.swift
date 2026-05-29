@@ -1127,11 +1127,18 @@ extension Ghostty {
             // for IME users — but the user explicitly preferred working
             // Ctrl+J over that nuance.
             if event.keyCode == 38, event.modifierFlags.contains(.control) {
-                NSLog("[WAVETTY-IME] Ctrl+J bypass fired; markedText.len=%d", markedText.length)
-                var key_ev = event.ghosttyKeyEvent(action, translationMods: translationEvent.modifierFlags)
-                key_ev.composing = false
-                let result = ghostty_surface_key(surface, key_ev)
-                NSLog("[WAVETTY-IME] ghostty_surface_key returned %d", result ? 1 : 0)
+                let evChars = event.characters ?? "<nil>"
+                let transChars = translationEvent.ghosttyCharacters ?? "<nil>"
+                NSLog("[WAVETTY-IME] Ctrl+J bypass; markedText=%d ev.chars=%@ trans.ghosttyChars=%@",
+                      markedText.length, evChars as NSString, transChars as NSString)
+                let result = keyAction(
+                    action,
+                    event: event,
+                    translationEvent: translationEvent,
+                    text: translationEvent.ghosttyCharacters,
+                    composing: false
+                )
+                NSLog("[WAVETTY-IME] keyAction returned %d", result ? 1 : 0)
                 return
             }
 
