@@ -1127,18 +1127,17 @@ extension Ghostty {
             // for IME users — but the user explicitly preferred working
             // Ctrl+J over that nuance.
             if event.keyCode == 38, event.modifierFlags.contains(.control) {
-                let evChars = event.characters ?? "<nil>"
-                let transChars = translationEvent.ghosttyCharacters ?? "<nil>"
-                NSLog("[WAVETTY-IME] Ctrl+J bypass; markedText=%d ev.chars=%@ trans.ghosttyChars=%@",
-                      markedText.length, evChars as NSString, transChars as NSString)
-                let result = keyAction(
-                    action,
-                    event: event,
-                    translationEvent: translationEvent,
-                    text: translationEvent.ghosttyCharacters,
-                    composing: false
-                )
-                NSLog("[WAVETTY-IME] keyAction returned %d", result ? 1 : 0)
+                // Under Korean IME, AppKit clears `event.characters` before
+                // keyDown fires, so the normal path can't even tell us a
+                // control char was pressed. Build the key event ourselves
+                // and inject the LF byte explicitly as text so libghostty
+                // writes it to the PTY regardless of input-source state.
+                var key_ev = event.ghosttyKeyEvent(action, translationMods: translationEvent.modifierFlags)
+                key_ev.composing = false
+                "\n".withCString { ptr in
+                    key_ev.text = ptr
+                    _ = ghostty_surface_key(surface, key_ev)
+                }
                 return
             }
 
