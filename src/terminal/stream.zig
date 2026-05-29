@@ -599,6 +599,9 @@ pub fn Stream(comptime H: type) type {
             const res = self.utf8decoder.next(c);
             const consumed = res[1];
             if (res[0]) |codepoint| {
+                if (codepoint == 0xFFFD) {
+                    std.log.err("WAVETTY-FFFD scalar byte=0x{x:0>2} consumed={}", .{ c, consumed });
+                }
                 self.handleCodepoint(codepoint);
             }
             if (!consumed) {

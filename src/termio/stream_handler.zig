@@ -203,6 +203,13 @@ pub const StreamHandler = struct {
         switch (action) {
             .print => {
                 @branchHint(.likely);
+                // Wavetty diag: catch the moment a replacement char is printed.
+                if (value.cp == 0xFFFD) {
+                    std.log.err("WAVETTY-FFFD printed at x={d} y={d}", .{
+                        self.terminal.screens.active.cursor.x,
+                        self.terminal.screens.active.cursor.y,
+                    });
+                }
                 try self.terminal.print(value.cp);
             },
             .print_repeat => try self.terminal.printRepeat(value),

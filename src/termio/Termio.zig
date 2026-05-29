@@ -689,6 +689,14 @@ fn processOutputLocked(self: *Termio, buf: []const u8) void {
             self.terminal_stream.next(byte);
         }
     } else {
+        // Wavetty diag: log each PTY read's length and boundary bytes so we
+        // can correlate U+FFFD prints with read-chunk boundaries splitting
+        // multi-byte UTF-8 sequences.
+        {
+            const head = buf[0..@min(buf.len, 8)];
+            const tail = buf[buf.len -| 8 ..];
+            std.log.err("WAVETTY-READ len={d} head={x} tail={x}", .{ buf.len, head, tail });
+        }
         self.terminal_stream.nextSlice(buf);
     }
 
