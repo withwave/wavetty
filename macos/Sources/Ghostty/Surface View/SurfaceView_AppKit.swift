@@ -1117,24 +1117,21 @@ extension Ghostty {
             // `interpretKeyEvents` may dispatch it.
             self.lastPerformKeyEvent = nil
 
-            // Wavetty: bypass IME for Ctrl+J when there is no active preedit.
-            // With Korean (and other CJK) IMEs active, interpretKeyEvents
-            // silently consumes Ctrl+J even when nothing is being composed,
-            // so the LF byte never reaches the PTY. We let upstream handle
-            // the "Ctrl+J while composing" case (it correctly commits the
-            // preedit without also emitting LF, matching Apple Terminal);
-            // here we just rescue the standalone / post-commit press.
-            //   keyCode 38 == ANSI 'J'
-            if event.keyCode == 38,
-               event.modifierFlags.intersection([.control, .command, .option]) == .control,
-               markedText.length == 0 {
-                _ = keyAction(
-                    action,
-                    event: event,
-                    translationEvent: translationEvent,
-                    text: translationEvent.ghosttyCharacters,
-                    composing: false
-                )
+            // Wavetty: aggressive bypass for Ctrl+J. interpretKeyEvents
+            // silently consumes Ctrl+J under Korean IME — even with no
+            // preedit — so the LF byte never reaches the PTY. We hand the
+            // key event directly to libghostty before the IME pipeline
+            // gets a chance to eat it. We do this unconditionally for
+            // Ctrl+J (keyCode 38 = ANSI J), accepting that this also
+            // overrides the "first press commits preedit only" behavior
+            // for IME users — but the user explicitly preferred working
+            // Ctrl+J over that nuance.
+            if event.keyCode == 38, event.modifierFlags.contains(.control) {
+                NSLog("[WAVETTY-IME] Ctrl+J bypass fired; markedText.len=%d", markedText.length)
+                var key_ev = event.ghosttyKeyEvent(action, translationMods: translationEvent.modifierFlags)
+                key_ev.composing = false
+                let result = ghostty_surface_key(surface, key_ev)
+                NSLog("[WAVETTY-IME] ghostty_surface_key returned %d", result ? 1 : 0)
                 return
             }
 
