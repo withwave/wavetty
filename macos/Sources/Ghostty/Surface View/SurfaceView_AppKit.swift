@@ -1144,12 +1144,18 @@ extension Ghostty {
                !event.modifierFlags.contains(.command),
                !event.modifierFlags.contains(.option),
                let controlByte = Ghostty.SurfaceView.controlByte(forKeyCode: event.keyCode) {
-                var key_ev = event.ghosttyKeyEvent(action, translationMods: translationEvent.modifierFlags)
-                key_ev.composing = false
-                let s = String(UnicodeScalar(controlByte))
-                s.withCString { ptr in
-                    key_ev.text = ptr
-                    _ = ghostty_surface_key(surface, key_ev)
+                // ghostty_surface_key under CJK IME silently swallows the
+                // input despite returning success (verified by logs). Skip
+                // the key-encoding path entirely and inject the byte as
+                // raw text input — same path paste uses, which is known to
+                // reach the PTY.
+                NSLog("[WAVETTY-IME] bypass kc=%d ctrl=0x%02x → ghostty_surface_text",
+                      Int(event.keyCode), controlByte)
+                var byte = controlByte
+                withUnsafePointer(to: &byte) { p in
+                    p.withMemoryRebound(to: CChar.self, capacity: 1) { cptr in
+                        ghostty_surface_text(surface, cptr, 1)
+                    }
                 }
                 return
             }
