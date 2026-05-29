@@ -1117,6 +1117,27 @@ extension Ghostty {
             // `interpretKeyEvents` may dispatch it.
             self.lastPerformKeyEvent = nil
 
+            // Wavetty: bypass IME for Ctrl+J when there is no active preedit.
+            // With Korean (and other CJK) IMEs active, interpretKeyEvents
+            // silently consumes Ctrl+J even when nothing is being composed,
+            // so the LF byte never reaches the PTY. We let upstream handle
+            // the "Ctrl+J while composing" case (it correctly commits the
+            // preedit without also emitting LF, matching Apple Terminal);
+            // here we just rescue the standalone / post-commit press.
+            //   keyCode 38 == ANSI 'J'
+            if event.keyCode == 38,
+               event.modifierFlags.intersection([.control, .command, .option]) == .control,
+               markedText.length == 0 {
+                _ = keyAction(
+                    action,
+                    event: event,
+                    translationEvent: translationEvent,
+                    text: translationEvent.ghosttyCharacters,
+                    composing: false
+                )
+                return
+            }
+
             self.interpretKeyEvents([translationEvent])
 
             // If our keyboard changed from this we just assume an input method
@@ -1199,20 +1220,13 @@ extension Ghostty {
                     return
                 }
 
-                // Wavetty: terminal-essential control codes (Tab/LF/CR/ESC)
-                // must be sent with composing=false even if the IME was
-                // composing — otherwise libghostty treats them as preedit
-                // input and the key never reaches the PTY.
-                let effectiveComposing = composing &&
-                    !Ghostty.SurfaceView.isTerminalControlPassthrough(event.characters)
-
                 // We have no accumulated text so this is a normal key event.
                 _ = keyAction(
                     action,
                     event: event,
                     translationEvent: translationEvent,
                     text: translationEvent.ghosttyCharacters,
-                    composing: effectiveComposing
+                    composing: composing
                 )
             }
         }
@@ -1447,12 +1461,6 @@ extension Ghostty {
         }
 
         private func shouldReplayCommittedPreeditKey(_ event: NSEvent) -> Bool {
-            // Wavetty: terminal-essential control codes (Tab/LF/CR/ESC) must
-            // be replayed after the IME commits preedit, otherwise pressing
-            // Ctrl+J / Enter / Tab / Esc in Hangul mode is silently swallowed.
-            if Ghostty.SurfaceView.isTerminalControlPassthrough(event.characters) {
-                return true
-            }
             guard let key = Ghostty.Input.Key(keyCode: event.keyCode) else { return false }
             switch key {
             case .arrowDown, .arrowRight, .arrowUp:
@@ -2169,29 +2177,7 @@ extension Ghostty.SurfaceView: NSTextInputClient {
               scalars.index(after: scalars.startIndex) == scalars.endIndex else {
             return false
         }
-        // Wavetty: universal terminal control codes (Tab/LF/CR/ESC) are not
-        // composition commands for any CJK IME and must always reach the PTY.
-        if Ghostty.SurfaceView.isTerminalControlPassthrough(text) { return false }
         return scalar.value < 0x20
-    }
-
-    /// Wavetty: True when `text` is one of the universal terminal control
-    /// codes that should always reach the PTY even during IME composition —
-    /// Tab (0x09), LF/Ctrl+J (0x0A), CR/Enter (0x0D), ESC (0x1B). Used to:
-    ///   (a) bypass `shouldSuppressComposingControlInput`,
-    ///   (b) force `composing=false` so libghostty actually emits the key,
-    ///   (c) replay these keys after the IME commits preedit text.
-    static func isTerminalControlPassthrough(_ text: String?) -> Bool {
-        guard let text else { return false }
-        let scalars = text.unicodeScalars
-        guard let scalar = scalars.first,
-              scalars.index(after: scalars.startIndex) == scalars.endIndex else {
-            return false
-        }
-        switch scalar.value {
-        case 0x09, 0x0A, 0x0D, 0x1B: return true
-        default: return false
-        }
     }
 }
 
