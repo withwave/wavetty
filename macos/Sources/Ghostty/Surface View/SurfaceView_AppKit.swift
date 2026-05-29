@@ -1176,12 +1176,10 @@ extension Ghostty {
                 if let scalar = letter.unicodeScalars.first {
                     key_ev.unshifted_codepoint = scalar.value
                 }
-                let result = letter.withCString { ptr -> Bool in
+                letter.withCString { ptr in
                     key_ev.text = ptr
-                    return ghostty_surface_key(surface, key_ev)
+                    _ = ghostty_surface_key(surface, key_ev)
                 }
-                NSLog("[WAVETTY-IME] surface_key kc=%d letter=%@ → %d",
-                      Int(event.keyCode), letter as NSString, result ? 1 : 0)
                 return
             }
 
