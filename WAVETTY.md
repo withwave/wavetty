@@ -468,7 +468,43 @@ upstream code**. Each Wavetty edit is small and stand-alone.
 
 ---
 
-## 11. Quick orientation for a new AI agent
+## 11. How Wavetty compares to other macOS terminals
+
+A reference for positioning the project (and answering the inevitable
+"why not just use Terminal.app / iTerm2?"). The single biggest differentiator
+is the **renderer**: Wavetty (via Ghostty's core) draws text on the **GPU with
+Metal**, while Terminal.app and iTerm2 are CPU-based by default. Everything
+below follows from that.
+
+| | **Wavetty** (Ghostty) | **iTerm2** | **Terminal.app** |
+|---|---|---|---|
+| Renderer | **GPU (Metal), native** | CPU (Metal optional/partial) | CPU (CoreText) |
+| Bulk output / scroll | ⭐ fastest | medium | slow |
+| Input latency | low | medium | medium |
+| Memory (RSS, typical) | ~150–200 MB | 200–500 MB+ (GBs with many tabs) | 80–150 MB |
+| Core | Zig + Swift | Objective-C (aging) | OS built-in |
+| Splits | ✅ | ✅ | tabs only |
+| Images (Kitty graphics) | ✅ | ✅ (own scheme) | ❌ |
+| Ligatures | ✅ | ✅ | ❌ |
+| Feature breadth | core-complete, clean | **vast** (triggers, tmux integration, …) | minimal |
+| Config | text file, simple | sprawling GUI | almost none |
+
+**Takeaways:**
+- vs **Terminal.app**: Wavetty is far faster and far more capable; the only
+  thing Terminal.app wins is being lighter and OS-built-in.
+- vs **iTerm2**: Wavetty is **both lighter and faster** — iTerm2's only edge is
+  the sheer quantity of niche power-features.
+
+**Wavetty-specific reliability angle** (relevant because users often arrive
+after a built-in terminal kept crashing under heavy/remote input): Ghostty's
+core handles panics gracefully, and Wavetty adds **session recovery** (restore
+a closed/force-killed window's tabs + splits + directory from the Dock menu)
+and **SSH auto-login**, directly addressing the instability that drives people
+to switch.
+
+---
+
+## 12. Quick orientation for a new AI agent
 
 Read order for first session:
 1. This file (WAVETTY.md) — 5 min
