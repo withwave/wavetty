@@ -1,11 +1,47 @@
 import Darwin
 import Foundation
+import Darwin.libproc
 
 /// Detects an `ssh user@host` invocation running directly in a terminal (i.e.
 /// typed by the user, not launched via the command palette) by inspecting the
 /// foreground process's argument vector. Lets Wavetty record/auto-add hosts the
 /// user connects to manually.
 enum SSHProcessInspector {
+    /// Walks the process subtree rooted at `pid` looking for an `ssh`
+    /// invocation, returning its `user@host[:port]` URI.
+    ///
+    /// This is needed because ghostty launches the shell wrapped in
+    /// `/usr/bin/login`, which is owned by root. The PTY's foreground process
+    /// is often that root `login` process, whose argv we (as a non-root user)
+    /// cannot read via KERN_PROCARGS2. The real `ssh` runs as a child (dropped
+    /// to the user's uid) and IS readable, so we descend the tree to find it.
+    static func sshURI(fromTreeRoot pid: Int32, maxDepth: Int = 6) -> String? {
+        var queue: [(pid: Int32, depth: Int)] = [(pid, 0)]
+        var visited = Set<Int32>()
+        while !queue.isEmpty {
+            let (p, depth) = queue.removeFirst()
+            guard visited.insert(p).inserted else { continue }
+            if let args = arguments(of: p), let uri = sshURI(from: args) {
+                return uri
+            }
+            if depth < maxDepth {
+                for child in childPids(of: p) { queue.append((child, depth + 1)) }
+            }
+        }
+        return nil
+    }
+
+    /// Returns the direct child PIDs of `pid` via libproc.
+    static func childPids(of pid: Int32) -> [Int32] {
+        let count = proc_listchildpids(pid, nil, 0)
+        guard count > 0 else { return [] }
+        var pids = [pid_t](repeating: 0, count: Int(count))
+        let bytes = count * Int32(MemoryLayout<pid_t>.size)
+        let written = proc_listchildpids(pid, &pids, bytes)
+        guard written > 0 else { return [] }
+        return Array(pids.prefix(Int(written)))
+    }
+
     /// Returns the argument vector of `pid` via `sysctl(KERN_PROCARGS2)`, or nil.
     static func arguments(of pid: Int32) -> [String]? {
         var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
@@ -45,8 +81,12 @@ enum SSHProcessInspector {
     /// If `args` is an `ssh` invocation, returns a `user@host[:port]` URI string
     /// (parseable by `SSHURIParser`). Returns nil for anything else.
     static func sshURI(from args: [String]) -> String? {
-        guard let program = args.first,
-              (program as NSString).lastPathComponent == "ssh" else { return nil }
+        guard let program = args.first else { return nil }
+        // A login shell sets argv[0] to e.g. "-ssh" (leading dash), and the
+        // path may be absolute ("/usr/bin/ssh"). Normalize both.
+        var name = (program as NSString).lastPathComponent
+        if name.hasPrefix("-") { name.removeFirst() }
+        guard name == "ssh" else { return nil }
 
         // ssh single-letter options that consume the next argument.
         let valueOptions: Set<Character> = [

@@ -26,6 +26,11 @@ final class SSHMenuController: NSObject, NSMenuDelegate {
         } else {
             main.addItem(menuItem)
         }
+        // Populate immediately so the ⇧⌘T key equivalent is registered even
+        // before the user first opens the menu. (A delegate-driven menu is
+        // otherwise empty until menuNeedsUpdate fires, and an empty menu has
+        // no key equivalents to match.)
+        if let submenu = menuItem.submenu { menuNeedsUpdate(submenu) }
     }
 
     // MARK: NSMenuDelegate
@@ -82,8 +87,14 @@ final class SSHMenuController: NSObject, NSMenuDelegate {
     }
 
     @objc private func newSSHTab(_ sender: Any?) {
-        // If the focused surface is an SSH session, open a new tab to the same
-        // host. Otherwise fall back to a normal new tab.
+        performNewSSHTab(sender)
+    }
+
+    /// Opens a new tab to the focused surface's SSH host, or a normal new tab
+    /// if it isn't an SSH session. Public so the surface's key handler can call
+    /// it directly for ⇧⌘T (the menu key equivalent never reaches the menu
+    /// because the focused surface intercepts key events first).
+    func performNewSSHTab(_ sender: Any? = nil) {
         if !SSHHostStore.shared.openSSHTabFromFocused() {
             (NSApp.delegate as? AppDelegate)?.newTab(sender)
         }

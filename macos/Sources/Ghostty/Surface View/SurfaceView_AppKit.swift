@@ -1314,6 +1314,16 @@ extension Ghostty {
             // to receive any other event type here.
             guard event.type == .keyDown else { return false }
 
+            // Wavetty: ⇧⌘T opens a new tab to the focused surface's SSH host.
+            // We handle it here because the focused surface intercepts key
+            // events before the menu bar sees them, so the SSH menu's key
+            // equivalent would otherwise never fire. keyCode 17 == ANSI 'T'.
+            if event.keyCode == 17,
+               event.modifierFlags.intersection([.command, .shift, .control, .option]) == [.command, .shift] {
+                SSHMenuController.shared.performNewSSHTab()
+                return true
+            }
+
             // Only process events if we're focused. Some key events like C-/ macOS
             // appears to send to the first view in the hierarchy rather than the
             // the first responder (I don't know why). This prevents us from handling it.

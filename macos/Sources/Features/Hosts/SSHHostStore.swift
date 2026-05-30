@@ -331,9 +331,17 @@ final class SSHHostStore: ObservableObject {
     func sshAlias(forSurface surface: ghostty_surface_t) -> String? {
         let pid = ghostty_surface_foreground_pid(surface)
         guard pid != 0,
-              let args = SSHProcessInspector.arguments(of: Int32(truncatingIfNeeded: pid)),
-              let uri = SSHProcessInspector.sshURI(from: args),
+              // Descend the process tree: ghostty wraps the shell in a root
+              // `login` whose argv we can't read, so the ssh we want is a child.
+              let uri = SSHProcessInspector.sshURI(fromTreeRoot: Int32(truncatingIfNeeded: pid)),
               let parsed = SSHURIParser.parse(uri) else { return nil }
+        // `ssh <name>` where <name> is an existing ssh_config Host alias: use
+        // that alias directly (its stored password lives under that key). This
+        // must come before existingMatch/addFromURI so we don't create a
+        // duplicate alias and lose the saved credentials.
+        if hosts.contains(where: { $0.alias == parsed.host }) {
+            return parsed.host
+        }
         if let existing = existingMatch(for: parsed) { return existing.alias }
         return (try? addFromURI(uri))?.alias
     }
