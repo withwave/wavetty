@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import GhosttyKit
 
 /// Combined view of an SSH host: config entry from `~/.ssh/config` plus
 /// Wavetty's sidecar metadata.
@@ -320,5 +321,36 @@ final class SSHHostStore: ObservableObject {
         guard let added = try? addFromURI(uri) else { return false }
         connect(added)
         return true
+    }
+
+    // MARK: - SSH-aware new tab
+
+    /// If a surface's foreground process is `ssh user@host`, returns the
+    /// matching ssh_config alias — adding the host to `~/.ssh/config` if it's
+    /// new, the same way the command-palette "Add & Connect" flow does.
+    func sshAlias(forSurface surface: ghostty_surface_t) -> String? {
+        let pid = ghostty_surface_foreground_pid(surface)
+        guard pid != 0,
+              let args = SSHProcessInspector.arguments(of: Int32(truncatingIfNeeded: pid)),
+              let uri = SSHProcessInspector.sshURI(from: args),
+              let parsed = SSHURIParser.parse(uri) else { return nil }
+        if let existing = existingMatch(for: parsed) { return existing.alias }
+        return (try? addFromURI(uri))?.alias
+    }
+
+    /// Opens a new tab logged into the SSH host of the currently focused
+    /// surface (with stored-password auto-login via the Keychain askpass).
+    /// Returns false if the focused surface isn't an SSH session, so the
+    /// caller can fall back to a normal new tab.
+    @discardableResult
+    func openSSHTabFromFocused() -> Bool {
+        guard let window = NSApp.keyWindow,
+              let controller = window.windowController as? BaseTerminalController,
+              let surfaceView = controller.focusedSurface,
+              let surface = surfaceView.surface,
+              let alias = sshAlias(forSurface: surface) else {
+            return false
+        }
+        return connect(alias: alias)
     }
 }
