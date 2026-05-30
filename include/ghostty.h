@@ -1156,6 +1156,8 @@ GHOSTTY_API void ghostty_surface_complete_clipboard_request(ghostty_surface_t,
                                                                void*,
                                                                bool);
 GHOSTTY_API ghostty_string_s ghostty_surface_dump_scrollback(ghostty_surface_t);
+// Wavetty: color-preserving (VT/SGR) scrollback dump; replay via a PTY.
+GHOSTTY_API ghostty_string_s ghostty_surface_dump_scrollback_styled(ghostty_surface_t);
 GHOSTTY_API void ghostty_surface_write_text_to_screen(ghostty_surface_t, const char*, uintptr_t);
 GHOSTTY_API bool ghostty_surface_has_selection(ghostty_surface_t);
 GHOSTTY_API bool ghostty_surface_read_selection(ghostty_surface_t, ghostty_text_s*);

@@ -15,6 +15,9 @@ const input = @import("../input.zig");
 const internal_os = @import("../os/main.zig");
 const renderer = @import("../renderer.zig");
 const terminal = @import("../terminal/main.zig");
+// Wavetty: styled (color-preserving) scrollback dump. See
+// ghostty_surface_dump_scrollback_styled below.
+const ScreenFormatter = @import("../terminal/formatter.zig").ScreenFormatter;
 const CoreApp = @import("../App.zig");
 const CoreInspector = @import("../inspector/main.zig").Inspector;
 const CoreSurface = @import("../Surface.zig");
@@ -1645,6 +1648,44 @@ pub const CAPI = struct {
             return .empty;
         };
         alloc.free(text);
+        return .fromSlice(copy);
+    }
+
+    /// Wavetty: same as ghostty_surface_dump_scrollback, but emits VT (SGR)
+    /// sequences so colors/styles are preserved. The result is meant to be
+    /// replayed back through a PTY (e.g. via `cat`) so the terminal parser
+    /// re-renders the colors — write_text_to_screen would print it literally.
+    export fn ghostty_surface_dump_scrollback_styled(surface: *Surface) String {
+        const alloc = surface.app.core_app.alloc;
+        const core = &surface.core_surface;
+
+        core.renderer_state.mutex.lock();
+        defer core.renderer_state.mutex.unlock();
+
+        if (core.io.terminal.screens.active_key == .alternate) return .empty;
+
+        const screen = core.io.terminal.screens.active;
+        const pages = &screen.pages;
+        const sel = terminal.Selection.init(
+            pages.getTopLeft(.screen),
+            pages.getBottomRight(.screen) orelse return .empty,
+            false,
+        );
+
+        var aw: std.Io.Writer.Allocating = .init(alloc);
+        defer aw.deinit();
+
+        var formatter: ScreenFormatter = .init(screen, .{
+            .emit = .vt,
+            .unwrap = true,
+            .trim = true,
+        });
+        formatter.content = .{ .selection = sel };
+        formatter.format(&aw.writer) catch return .empty;
+
+        const text = aw.toOwnedSliceSentinel(0) catch return .empty;
+        defer alloc.free(text);
+        const copy = alloc.dupeZ(u8, text) catch return .empty;
         return .fromSlice(copy);
     }
 
