@@ -97,6 +97,9 @@ extension Ghostty {
 
         func setChildExitedMessage(_ message: ChildExitedMessage) {
             self.childExitedMessage = message
+            // Wavetty: let the session store snapshot this surface's final
+            // screen before it's torn down (captures up to an ssh disconnect).
+            NotificationCenter.default.post(name: .wavettyChildExited, object: self)
         }
 
         @MainActor

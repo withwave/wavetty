@@ -114,14 +114,14 @@ final class SessionHistoryStore: ObservableObject {
 
     @Published private(set) var recentWindows: [RecentWindow] = []
 
-    /// Periodic safety-net sweep so a force-kill / crash still leaves the most
-    /// recent window layouts on disk (close/terminate hooks never run on SIGKILL).
-    private var sweepTimer: Timer?
-    private static let sweepInterval: TimeInterval = 15
-
     private init() {
         recentWindows = Self.load()
 
+        // Capture only on real events — no periodic sweep. Dumping scrollback
+        // is not cheap, and the events below cover every case the user cares
+        // about: closing a tab/window, an ssh disconnect (child exit), losing
+        // key focus (switching away), and app termination. Only an app crash /
+        // SIGKILL escapes these, which is rare.
         let nc = NotificationCenter.default
         nc.addObserver(
             self, selector: #selector(windowWillClose(_:)),
@@ -132,12 +132,11 @@ final class SessionHistoryStore: ObservableObject {
         nc.addObserver(
             self, selector: #selector(windowDidResignKey(_:)),
             name: NSWindow.didResignKeyNotification, object: nil)
-
-        let timer = Timer(timeInterval: Self.sweepInterval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.sweepAllWindows() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        sweepTimer = timer
+        // Capture the moment a child process exits (e.g. ssh disconnect) so the
+        // session's final screen is saved before it's gone.
+        nc.addObserver(
+            self, selector: #selector(childDidExit(_:)),
+            name: .wavettyChildExited, object: nil)
     }
 
     // MARK: - Recording
@@ -154,6 +153,13 @@ final class SessionHistoryStore: ObservableObject {
     }
 
     @objc private func windowDidResignKey(_ note: Notification) {
+        sweepAllWindows()
+    }
+
+    @objc private func childDidExit(_ note: Notification) {
+        // The surface still holds its final screen at this point (ghostty keeps
+        // the surface alive to show "[process exited]"), so capturing now grabs
+        // the last output — e.g. everything up to an ssh disconnect.
         sweepAllWindows()
     }
 
@@ -275,10 +281,6 @@ final class SessionHistoryStore: ObservableObject {
         return (scrollbackDir as NSString).appendingPathComponent(String(safe) + ".ansi")
     }
 
-    /// Single-quote a string for safe inclusion in a shell command line.
-    private static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
 
     /// If the surface's foreground process is `ssh user@host`, returns the
     /// ssh_config alias for it — adding the host to `~/.ssh/config` if needed,
@@ -413,6 +415,68 @@ final class SessionHistoryStore: ObservableObject {
             }
             primaryWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+
+            // Inject color scrollback + start ssh once surfaces attach.
+            self.processPendingRestores()
+        }
+    }
+
+    /// Per-surface work to run after a restored surface attaches: inject its
+    /// color-preserving scrollback (no shell echo) and start ssh via stdin.
+    private struct PendingRestore { var file: String?; var ssh: String? }
+    private var pendingRestores: [UUID: PendingRestore] = [:]
+
+    private func processPendingRestores() {
+        let pending = pendingRestores
+        pendingRestores.removeAll()
+        for (uuid, info) in pending {
+            injectRestore(uuid: uuid, info: info, attempts: 0)
+        }
+    }
+
+    private func injectRestore(uuid: UUID, info: PendingRestore, attempts: Int) {
+        guard let view = findSurfaceView(uuid), let surface = view.surface else {
+            // Surface not attached yet; retry briefly (mirrors ghostty's own
+            // restore polling).
+            guard attempts < 40 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                self?.injectRestore(uuid: uuid, info: info, attempts: attempts + 1)
+            }
+            return
+        }
+
+        if let file = info.file,
+           let text = try? String(contentsOfFile: file, encoding: .utf8),
+           !text.isEmpty {
+            // Route through the VT parser so colors render; no PTY/shell echo.
+            Self.writeStyled(surface, text)
+            Self.writeStyled(surface, "\r\n\u{1b}[2m──── previous session ──── \u{1b}[0m\r\n")
+        }
+
+        if let ssh = info.ssh {
+            // Send `ssh <host>` as if typed; the shell runs it (and the askpass
+            // env we set makes it auto-login).
+            Self.sendText(surface, "ssh \(ssh)\r")
+        }
+    }
+
+    private func findSurfaceView(_ uuid: UUID) -> Ghostty.SurfaceView? {
+        for window in NSApp.windows {
+            guard let controller = window.windowController as? BaseTerminalController else { continue }
+            for view in controller.surfaceTree where view.id == uuid { return view }
+        }
+        return nil
+    }
+
+    private static func writeStyled(_ surface: ghostty_surface_t, _ text: String) {
+        text.withCString { ptr in
+            ghostty_surface_write_styled_to_screen(surface, ptr, UInt(strlen(ptr)))
+        }
+    }
+
+    private static func sendText(_ surface: ghostty_surface_t, _ text: String) {
+        text.withCString { ptr in
+            ghostty_surface_text(surface, ptr, UInt(strlen(ptr)))
         }
     }
 
@@ -420,40 +484,25 @@ final class SessionHistoryStore: ObservableObject {
     private func buildNode(_ node: SessionNode, app: ghostty_app_t) -> SplitTree<Ghostty.SurfaceView>.Node {
         switch node {
         case .leaf(let leaf):
+            // Always open a plain shell. Scrollback injection (color-preserving,
+            // no echo) and the ssh start happen AFTER the surface attaches —
+            // see processPendingRestores. Doing it post-attach avoids echoing
+            // any command into the screen (which previously got re-captured
+            // into the scrollback, corrupting it).
             var config = Ghostty.SurfaceConfiguration()
-
-            // Pre-commands replayed via initialInput (the shell runs them, so
-            // we can chain commands — `command` would be whitespace-split and
-            // can't). `cat`-ing the saved scrollback through the PTY makes
-            // ghostty re-render its colors (write_text_to_screen would print
-            // it literally).
-            var pre: [String] = []
-            if let file = leaf.scrollbackFile, FileManager.default.fileExists(atPath: file) {
-                pre.append("cat \(Self.shellQuote(file))")
-                pre.append("printf '\\033[2m──────── previous session ────────\\033[0m\\n'")
-            }
-
-            if let alias = leaf.sshAlias {
-                // Carry stored-password auto-login env onto the shell so the
-                // ssh launched via initialInput still uses the Keychain askpass.
-                if let env = SSHAskpass.environment(for: alias) {
-                    for (k, v) in env { config.environmentVariables[k] = v }
-                }
-                if pre.isEmpty {
-                    config.command = "ssh \(alias)"
-                    config.waitAfterCommand = true
-                } else {
-                    pre.append("ssh \(Self.shellQuote(alias))")
-                    config.initialInput = pre.joined(separator: "; ") + "\r"
-                }
-            } else if let dir = leaf.workingDirectory {
+            if let dir = leaf.workingDirectory {
                 config.workingDirectory = dir
-                if !pre.isEmpty {
-                    config.initialInput = pre.joined(separator: "; ") + "\r"
-                }
+            }
+            if let alias = leaf.sshAlias, let env = SSHAskpass.environment(for: alias) {
+                // Carry Keychain askpass env so the ssh we start via stdin
+                // auto-fills the stored password.
+                for (k, v) in env { config.environmentVariables[k] = v }
             }
 
             let view = Ghostty.SurfaceView(app, baseConfig: config)
+            if leaf.scrollbackFile != nil || leaf.sshAlias != nil {
+                pendingRestores[view.id] = .init(file: leaf.scrollbackFile, ssh: leaf.sshAlias)
+            }
             return .leaf(view: view)
         case .split(let direction, let ratio, let left, let right):
             return .split(.init(
@@ -493,4 +542,10 @@ final class SessionHistoryStore: ObservableObject {
         guard let data = try? enc.encode(windows) else { return }
         try? data.write(to: Self.storeURL, options: .atomic)
     }
+}
+
+extension Notification.Name {
+    /// Posted by a surface when its child process exits, so the session store
+    /// can capture the final screen.
+    static let wavettyChildExited = Notification.Name("WavettyChildExited")
 }

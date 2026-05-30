@@ -1710,6 +1710,22 @@ pub const CAPI = struct {
         };
     }
 
+    /// Wavetty: like write_text_to_screen but routes the bytes through the VT
+    /// stream parser, so ANSI/SGR escape sequences are INTERPRETED (colors
+    /// render) rather than printed literally. Used to restore color-preserving
+    /// scrollback (captured via dump_scrollback_styled) without echoing any
+    /// shell command. Bypasses the PTY — the shell never sees this text.
+    export fn ghostty_surface_write_styled_to_screen(
+        surface: *Surface,
+        text: [*]const u8,
+        len: usize,
+    ) void {
+        const core = &surface.core_surface;
+        core.renderer_state.mutex.lock();
+        defer core.renderer_state.mutex.unlock();
+        core.io.terminal_stream.nextSlice(text[0..len]);
+    }
+
     /// Returns true if the surface has a selection.
     export fn ghostty_surface_has_selection(surface: *Surface) bool {
         return surface.core_surface.hasSelection();
