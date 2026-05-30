@@ -24,6 +24,9 @@ struct WindowFrame: Codable, Equatable {
 struct SessionLeaf: Codable, Equatable {
     var workingDirectory: String?
     var sshAlias: String?
+    /// Path to a file holding this surface's color-preserving (VT/SGR)
+    /// scrollback, captured so a reopened session shows its prior output.
+    var scrollbackFile: String?
 }
 
 enum SplitDir: String, Codable { case horizontal, vertical }
@@ -216,6 +219,17 @@ final class SessionHistoryStore: ObservableObject {
             } else if let dir = effectivePwd(of: view), isLocalDirectory(dir) {
                 leaf.workingDirectory = dir
             }
+            // Capture color-preserving scrollback to a deterministic file (keyed
+            // by host/dir) so the same session overwrites in place rather than
+            // accumulating files. Only when there's something to identify it by.
+            if let key = scrollbackKey(for: leaf), let surface = view.surface {
+                if let text = dumpScrollbackStyled(surface), !text.isEmpty {
+                    let file = Self.scrollbackPath(key: key)
+                    if (try? text.write(toFile: file, atomically: true, encoding: .utf8)) != nil {
+                        leaf.scrollbackFile = file
+                    }
+                }
+            }
             return .leaf(leaf)
         case .split(let split):
             return .split(
@@ -229,6 +243,41 @@ final class SessionHistoryStore: ObservableObject {
     private func isLocalDirectory(_ path: String) -> Bool {
         var isDir: ObjCBool = false
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
+    }
+
+    // MARK: - Scrollback capture
+
+    /// Color-preserving (VT/SGR) scrollback text for a surface, or nil if empty.
+    private func dumpScrollbackStyled(_ surface: ghostty_surface_t) -> String? {
+        let text = Ghostty.AllocatedString(ghostty_surface_dump_scrollback_styled(surface)).string
+        return text.isEmpty ? nil : text
+    }
+
+    /// A stable filename key for a leaf, so the same host/dir overwrites in
+    /// place. nil when the leaf has nothing identifying to key on.
+    private func scrollbackKey(for leaf: SessionLeaf) -> String? {
+        if let alias = leaf.sshAlias { return "ssh-\(alias)" }
+        if let dir = leaf.workingDirectory { return "dir-\(dir)" }
+        return nil
+    }
+
+    private static var scrollbackDir: String {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.modincompany.wavetty"
+        let dir = base.appendingPathComponent(bundleID, isDirectory: true)
+            .appendingPathComponent("scrollback", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.path
+    }
+
+    private static func scrollbackPath(key: String) -> String {
+        let safe = key.map { ($0.isLetter || $0.isNumber || "._-".contains($0)) ? $0 : "_" }
+        return (scrollbackDir as NSString).appendingPathComponent(String(safe) + ".ansi")
+    }
+
+    /// Single-quote a string for safe inclusion in a shell command line.
+    private static func shellQuote(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// If the surface's foreground process is `ssh user@host`, returns the
@@ -372,12 +421,38 @@ final class SessionHistoryStore: ObservableObject {
         switch node {
         case .leaf(let leaf):
             var config = Ghostty.SurfaceConfiguration()
+
+            // Pre-commands replayed via initialInput (the shell runs them, so
+            // we can chain commands — `command` would be whitespace-split and
+            // can't). `cat`-ing the saved scrollback through the PTY makes
+            // ghostty re-render its colors (write_text_to_screen would print
+            // it literally).
+            var pre: [String] = []
+            if let file = leaf.scrollbackFile, FileManager.default.fileExists(atPath: file) {
+                pre.append("cat \(Self.shellQuote(file))")
+                pre.append("printf '\\033[2m──────── previous session ────────\\033[0m\\n'")
+            }
+
             if let alias = leaf.sshAlias {
-                config.command = "ssh \(alias)"
-                config.waitAfterCommand = true
+                // Carry stored-password auto-login env onto the shell so the
+                // ssh launched via initialInput still uses the Keychain askpass.
+                if let env = SSHAskpass.environment(for: alias) {
+                    for (k, v) in env { config.environmentVariables[k] = v }
+                }
+                if pre.isEmpty {
+                    config.command = "ssh \(alias)"
+                    config.waitAfterCommand = true
+                } else {
+                    pre.append("ssh \(Self.shellQuote(alias))")
+                    config.initialInput = pre.joined(separator: "; ") + "\r"
+                }
             } else if let dir = leaf.workingDirectory {
                 config.workingDirectory = dir
+                if !pre.isEmpty {
+                    config.initialInput = pre.joined(separator: "; ") + "\r"
+                }
             }
+
             let view = Ghostty.SurfaceView(app, baseConfig: config)
             return .leaf(view: view)
         case .split(let direction, let ratio, let left, let right):
