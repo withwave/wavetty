@@ -1146,6 +1146,15 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     // Shows the "+" button in the tab bar, responds to that click.
     override func newWindowForTab(_ sender: Any?) {
+        // Wavetty: Shift-clicking the tab bar's "+" button opens a new tab
+        // logged into the same SSH host as the current surface (auto-login
+        // if a password is stored). Falls through to a normal new tab when
+        // the current surface isn't an SSH session.
+        if NSApp.currentEvent?.modifierFlags.contains(.shift) == true,
+           SSHHostStore.shared.openSSHTabFromFocused() {
+            return
+        }
+
         // Trigger the ghostty core event logic for a new tab.
         guard let surface = self.focusedSurface?.surface else { return }
         ghostty.newTab(surface: surface)

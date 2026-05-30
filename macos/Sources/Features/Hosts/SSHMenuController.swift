@@ -33,6 +33,18 @@ final class SSHMenuController: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
+        // New tab to the current surface's SSH host (⇧⌘T). Kept first and
+        // static so its key equivalent works even when the menu isn't open.
+        let newSSHTab = NSMenuItem(
+            title: "New Tab to Current SSH Host",
+            action: #selector(newSSHTab(_:)),
+            keyEquivalent: "t")
+        newSSHTab.keyEquivalentModifierMask = [.command, .shift]
+        newSSHTab.target = self
+        newSSHTab.image = NSImage(systemSymbolName: "plus.rectangle.on.rectangle", accessibilityDescription: nil)
+        menu.addItem(newSSHTab)
+        menu.addItem(.separator())
+
         let hosts = SSHHostStore.shared.suggestions(for: "", limit: 15)
         if hosts.isEmpty {
             let empty = NSMenuItem(title: "No SSH Hosts", action: nil, keyEquivalent: "")
@@ -67,6 +79,14 @@ final class SSHMenuController: NSObject, NSMenuDelegate {
     @objc private func connect(_ sender: NSMenuItem) {
         guard let alias = sender.representedObject as? String else { return }
         SSHHostStore.shared.connect(alias: alias)
+    }
+
+    @objc private func newSSHTab(_ sender: Any?) {
+        // If the focused surface is an SSH session, open a new tab to the same
+        // host. Otherwise fall back to a normal new tab.
+        if !SSHHostStore.shared.openSSHTabFromFocused() {
+            (NSApp.delegate as? AppDelegate)?.newTab(sender)
+        }
     }
 
     @objc private func manage() {
