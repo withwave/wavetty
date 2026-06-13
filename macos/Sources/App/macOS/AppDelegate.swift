@@ -1131,8 +1131,23 @@ extension AppDelegate {
                 item.target = self
                 item.representedObject = window
                 item.setImageIfDesired(systemSymbolName: window.isSSH ? "network" : "macwindow")
+                // Wavetty: submenu with Restore + Remove so user can delete entries.
+                let sub = NSMenu()
+                let restore = NSMenuItem(title: "Restore", action: #selector(restoreRecentWindow(_:)), keyEquivalent: "")
+                restore.target = self
+                restore.representedObject = window
+                sub.addItem(restore)
+                let remove = NSMenuItem(title: "Remove from List", action: #selector(removeRecentWindow(_:)), keyEquivalent: "")
+                remove.target = self
+                remove.representedObject = window
+                sub.addItem(remove)
+                item.submenu = sub
                 dockMenu.addItem(item)
             }
+            dockMenu.addItem(.separator())
+            let manageItem = NSMenuItem(title: "Manage Recent Sessions…", action: #selector(showRecentSessions), keyEquivalent: "")
+            manageItem.target = self
+            dockMenu.addItem(manageItem)
         }
 
         // Wavetty: SSH hosts — pinned/recent first, one click to connect.
@@ -1163,6 +1178,15 @@ extension AppDelegate {
     @objc private func restoreRecentWindow(_ sender: NSMenuItem) {
         guard let window = sender.representedObject as? RecentWindow else { return }
         MainActor.assumeIsolated { SessionHistoryStore.shared.restore(window) }
+    }
+
+    @objc private func removeRecentWindow(_ sender: NSMenuItem) {
+        guard let window = sender.representedObject as? RecentWindow else { return }
+        MainActor.assumeIsolated { SessionHistoryStore.shared.remove(id: window.id) }
+    }
+
+    @objc func showRecentSessions() {
+        MainActor.assumeIsolated { RecentSessionsWindowController.show() }
     }
 
     /// Setup all the images for our menu items.

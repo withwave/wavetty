@@ -225,12 +225,16 @@ final class SessionHistoryStore: ObservableObject {
             } else if let dir = effectivePwd(of: view), isLocalDirectory(dir) {
                 leaf.workingDirectory = dir
             }
-            // Capture color-preserving scrollback to a deterministic file (keyed
-            // by host/dir) so the same session overwrites in place rather than
-            // accumulating files. Only when there's something to identify it by.
-            if let key = scrollbackKey(for: leaf), let surface = view.surface {
+            // Capture color-preserving scrollback to a file keyed by the
+            // surface's unique id. Keying by host/dir was wrong: multiple tabs
+            // in the same directory (or to the same host) then shared one file,
+            // so restoring one tab showed another tab's output. The surface id
+            // is unique per live surface, stable across re-captures of the same
+            // session, and orphaned files are pruned on save (cleanupOrphans).
+            if (leaf.sshAlias != nil || leaf.workingDirectory != nil),
+               let surface = view.surface {
                 if let text = dumpScrollbackStyled(surface), !text.isEmpty {
-                    let file = Self.scrollbackPath(key: key)
+                    let file = Self.scrollbackPath(key: view.id.uuidString)
                     if (try? text.write(toFile: file, atomically: true, encoding: .utf8)) != nil {
                         leaf.scrollbackFile = file
                     }
@@ -257,14 +261,6 @@ final class SessionHistoryStore: ObservableObject {
     private func dumpScrollbackStyled(_ surface: ghostty_surface_t) -> String? {
         let text = Ghostty.AllocatedString(ghostty_surface_dump_scrollback_styled(surface)).string
         return text.isEmpty ? nil : text
-    }
-
-    /// A stable filename key for a leaf, so the same host/dir overwrites in
-    /// place. nil when the leaf has nothing identifying to key on.
-    private func scrollbackKey(for leaf: SessionLeaf) -> String? {
-        if let alias = leaf.sshAlias { return "ssh-\(alias)" }
-        if let dir = leaf.workingDirectory { return "dir-\(dir)" }
-        return nil
     }
 
     private static var scrollbackDir: String {
@@ -339,6 +335,11 @@ final class SessionHistoryStore: ObservableObject {
         }
         if save { Self.save(recentWindows) }
         return true
+    }
+
+    func remove(id: UUID) {
+        recentWindows.removeAll { $0.id == id }
+        Self.save(recentWindows)
     }
 
     func clear() {
@@ -541,6 +542,31 @@ final class SessionHistoryStore: ObservableObject {
         enc.dateEncodingStrategy = .iso8601
         guard let data = try? enc.encode(windows) else { return }
         try? data.write(to: Self.storeURL, options: .atomic)
+        cleanupOrphanScrollback(windows)
+    }
+
+    /// Delete scrollback files no longer referenced by any retained window.
+    /// Surface-id-keyed files would otherwise accumulate as sessions churn.
+    private static func cleanupOrphanScrollback(_ windows: [RecentWindow]) {
+        var referenced = Set<String>()
+        func collect(_ node: SessionNode) {
+            switch node {
+            case .leaf(let leaf):
+                if let f = leaf.scrollbackFile { referenced.insert(f) }
+            case .split(_, _, let l, let r):
+                collect(l); collect(r)
+            }
+        }
+        for w in windows { for t in w.tabs { collect(t.root) } }
+
+        let dir = scrollbackDir
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return }
+        for name in files where name.hasSuffix(".ansi") {
+            let full = (dir as NSString).appendingPathComponent(name)
+            if !referenced.contains(full) {
+                try? FileManager.default.removeItem(atPath: full)
+            }
+        }
     }
 }
 
