@@ -383,12 +383,20 @@ final class SessionHistoryStore: ObservableObject {
 
     // MARK: - Restore
 
+    // Wavetty: tracks IDs currently mid-restore to block duplicate clicks.
+    private var restoringIDs: Set<UUID> = []
+
     /// Reopens a window restored to its last position/size, rebuilding every
     /// tab and split. Local leaves cd into their directory; SSH leaves reconnect.
     func restore(_ window: RecentWindow) {
+        // Block re-entry: prevents duplicate restores from double-click or
+        // rapidly clicking the same item before the first restore finishes.
+        guard !restoringIDs.contains(window.id) else { return }
+
         guard let appDelegate = NSApp.delegate as? AppDelegate,
               let app = appDelegate.ghostty.app,
               !window.tabs.isEmpty else { return }
+        restoringIDs.insert(window.id)
 
         // First tab becomes the primary window. A plain controller init does
         // not present its window (unlike newWindow/newTab which schedule it),
@@ -419,6 +427,8 @@ final class SessionHistoryStore: ObservableObject {
 
             // Inject color scrollback + start ssh once surfaces attach.
             self.processPendingRestores()
+            // Allow restoring this window again (e.g. if the user closed it).
+            self.restoringIDs.remove(window.id)
         }
     }
 
