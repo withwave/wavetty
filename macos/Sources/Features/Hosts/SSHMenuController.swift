@@ -79,13 +79,6 @@ final class SSHMenuController: NSObject, NSMenuDelegate {
         manage.keyEquivalentModifierMask = [.command, .shift]
         manage.target = self
         menu.addItem(manage)
-        // Wavetty: recent sessions management (x-button delete UI)
-        let recent = NSMenuItem(
-            title: "Recent Sessions…",
-            action: #selector(showRecentSessions),
-            keyEquivalent: "")
-        recent.target = self
-        menu.addItem(recent)
     }
 
     @objc private func connect(_ sender: NSMenuItem) {
@@ -109,9 +102,5 @@ final class SSHMenuController: NSObject, NSMenuDelegate {
 
     @objc private func manage() {
         SSHHostManagerWindowController.show()
-    }
-
-    @objc private func showRecentSessions() {
-        RecentSessionsWindowController.show()
     }
 }

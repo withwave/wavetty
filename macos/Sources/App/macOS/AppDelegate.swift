@@ -1133,10 +1133,6 @@ extension AppDelegate {
                 )
                 dockMenu.addItem(item)
             }
-            dockMenu.addItem(.separator())
-            let manageItem = NSMenuItem(title: "Manage Recent Sessions…", action: #selector(showRecentSessions), keyEquivalent: "")
-            manageItem.target = self
-            dockMenu.addItem(manageItem)
         }
 
         // Wavetty: SSH hosts — pinned/recent first, one click to connect.
@@ -1172,10 +1168,6 @@ extension AppDelegate {
     @objc private func removeRecentWindow(_ sender: NSMenuItem) {
         guard let window = sender.representedObject as? RecentWindow else { return }
         MainActor.assumeIsolated { SessionHistoryStore.shared.remove(id: window.id) }
-    }
-
-    @objc func showRecentSessions() {
-        MainActor.assumeIsolated { RecentSessionsWindowController.show() }
     }
 
     // Called from custom menu item view (not @objc sender-based).
