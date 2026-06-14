@@ -114,6 +114,26 @@ final class SessionHistoryStore: ObservableObject {
 
     @Published private(set) var recentWindows: [RecentWindow] = []
 
+    /// Live window/tab-group object ids the user explicitly removed while still
+    /// open. The sweep skips capturing *these specific windows* so a delete
+    /// isn't immediately undone by the next capture. A brand-new window (e.g. a
+    /// reconnect to the same host) is a different object and is captured
+    /// normally. Stale ids are pruned each sweep (see `sweepAllWindows`).
+    private var suppressedWindows: Set<ObjectIdentifier> = []
+
+    /// SSH alias tagged at session creation (connect or restore), keyed by
+    /// surface id. `captureNode` prefers this over live foreground-process
+    /// inspection, so a session opened as `ssh <alias>` is recorded as
+    /// ssh:<alias> even if ssh already exited (e.g. a quick connect/disconnect)
+    /// by the time a sweep captures it. Pruned to live surfaces each sweep.
+    private var taggedSSHAliases: [UUID: String] = [:]
+
+    /// Tag a surface as an SSH session to `alias`. Called from the SSH connect
+    /// path and from restore so capture doesn't depend on ssh still running.
+    func noteSSHSession(surfaceID: UUID, alias: String) {
+        taggedSSHAliases[surfaceID] = alias
+    }
+
     private init() {
         recentWindows = Self.load()
 
@@ -183,8 +203,23 @@ final class SessionHistoryStore: ObservableObject {
             }
         }
 
+        // Drop suppression ids for windows that have since closed.
+        suppressedWindows.formIntersection(Set(order))
+
+        // Prune ssh tags down to surfaces that still exist.
+        if !taggedSSHAliases.isEmpty {
+            var liveSurfaceIDs: Set<UUID> = []
+            for window in NSApp.windows {
+                guard let controller = window.windowController as? BaseTerminalController else { continue }
+                for view in controller.surfaceTree { liveSurfaceIDs.insert(view.id) }
+            }
+            taggedSSHAliases = taggedSSHAliases.filter { liveSurfaceIDs.contains($0.key) }
+        }
+
         var changed = false
         for key in order {
+            // Skip windows the user explicitly removed (until they close).
+            if suppressedWindows.contains(key) { continue }
             if snapshotGroup(anyWindow: groups[key]!, save: false) { changed = true }
         }
         if changed { Self.save(recentWindows) }
@@ -220,7 +255,9 @@ final class SessionHistoryStore: ObservableObject {
         switch node {
         case .leaf(let view):
             var leaf = SessionLeaf()
-            if let alias = sshAlias(of: view) {
+            // Prefer the alias tagged at session creation (survives ssh exit),
+            // then fall back to live foreground-process inspection.
+            if let alias = taggedSSHAliases[view.id] ?? sshAlias(of: view) {
                 leaf.sshAlias = alias
             } else if let dir = effectivePwd(of: view), isLocalDirectory(dir) {
                 leaf.workingDirectory = dir
@@ -286,9 +323,11 @@ final class SessionHistoryStore: ObservableObject {
     private func sshAlias(of view: Ghostty.SurfaceView) -> String? {
         guard let surface = view.surface else { return nil }
         let pid = ghostty_surface_foreground_pid(surface)
+        // Descend the process tree: ghostty wraps the shell in a root-owned
+        // `/usr/bin/login` whose argv we can't read, but the real `ssh` runs as
+        // a readable child. (Inspecting only the foreground pid missed these.)
         guard pid != 0,
-              let args = SSHProcessInspector.arguments(of: Int32(truncatingIfNeeded: pid)),
-              let uri = SSHProcessInspector.sshURI(from: args),
+              let uri = SSHProcessInspector.sshURI(fromTreeRoot: Int32(truncatingIfNeeded: pid)),
               let parsed = SSHURIParser.parse(uri) else { return nil }
 
         if let existing = SSHHostStore.shared.existingMatch(for: parsed) {
@@ -338,6 +377,14 @@ final class SessionHistoryStore: ObservableObject {
     }
 
     func remove(id: UUID) {
+        // If a live window currently matches this entry, suppress that specific
+        // window so the next sweep doesn't re-capture it back into the list. A
+        // later reconnect opens a different window object and is captured.
+        if let entry = recentWindows.first(where: { $0.id == id }),
+           let live = liveWindow(matching: entry) {
+            let repObject: AnyObject = live.tabGroup ?? live
+            suppressedWindows.insert(ObjectIdentifier(repObject))
+        }
         recentWindows.removeAll { $0.id == id }
         Self.save(recentWindows)
     }
@@ -393,6 +440,18 @@ final class SessionHistoryStore: ObservableObject {
         // rapidly clicking the same item before the first restore finishes.
         guard !restoringIDs.contains(window.id) else { return }
 
+        // If a window with the same content is already open, focus it instead
+        // of opening a duplicate. Same signature == same tabs/dirs/splits/hosts,
+        // which is exactly how recents dedupe (see upsert).
+        if let live = liveWindow(matching: window) {
+            if let group = live.tabGroup, group.selectedWindow !== live {
+                group.selectedWindow = live
+            }
+            live.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
         guard let appDelegate = NSApp.delegate as? AppDelegate,
               let app = appDelegate.ghostty.app,
               !window.tabs.isEmpty else { return }
@@ -429,6 +488,65 @@ final class SessionHistoryStore: ObservableObject {
             self.processPendingRestores()
             // Allow restoring this window again (e.g. if the user closed it).
             self.restoringIDs.remove(window.id)
+        }
+    }
+
+    /// Finds an already-open terminal window/tab-group whose live content
+    /// signature matches `target`, so restore can focus it instead of opening
+    /// a duplicate. Mirrors the grouping logic in `sweepAllWindows` but computes
+    /// the signature directly from live views (no scrollback side effects).
+    private func liveWindow(matching target: RecentWindow) -> NSWindow? {
+        var groups: [ObjectIdentifier: NSWindow] = [:]
+        var order: [ObjectIdentifier] = []
+        for window in NSApp.windows {
+            guard window.windowController is TerminalController else { continue }
+            let repObject: AnyObject = window.tabGroup ?? window
+            let key = ObjectIdentifier(repObject)
+            if groups[key] == nil {
+                groups[key] = window
+                order.append(key)
+            }
+        }
+
+        for key in order {
+            let anyWindow = groups[key]!
+            let tabWindows: [NSWindow]
+            if let group = anyWindow.tabGroup {
+                tabWindows = group.windows.filter { $0.windowController is TerminalController }
+            } else {
+                tabWindows = [anyWindow]
+            }
+
+            var tabSigs: [String] = []
+            for window in tabWindows {
+                guard let controller = window.windowController as? TerminalController,
+                      let root = controller.surfaceTree.root else { continue }
+                tabSigs.append(liveNodeSignature(root))
+            }
+            guard !tabSigs.isEmpty else { continue }
+
+            let liveSignature = tabSigs.joined(separator: " ⇥ ")
+            if liveSignature == target.signature { return tabWindows.first }
+        }
+        return nil
+    }
+
+    /// Live structural signature of one leaf — mirrors `SessionNode.signature`
+    /// but reads directly from the surface, with no capture side effects.
+    private func liveLeafSignature(_ view: Ghostty.SurfaceView) -> String {
+        if let alias = sshAlias(of: view) { return "ssh:\(alias)" }
+        if let dir = effectivePwd(of: view), isLocalDirectory(dir) { return dir }
+        return "∅"
+    }
+
+    /// Live structural signature of a split-tree node — mirrors `SessionNode.signature`.
+    private func liveNodeSignature(_ node: SplitTree<Ghostty.SurfaceView>.Node) -> String {
+        switch node {
+        case .leaf(let view):
+            return liveLeafSignature(view)
+        case .split(let split):
+            let dir: SplitDir = split.direction == .horizontal ? .horizontal : .vertical
+            return "(\(dir.rawValue) \(liveNodeSignature(split.left)) \(liveNodeSignature(split.right)))"
         }
     }
 
@@ -511,6 +629,11 @@ final class SessionHistoryStore: ObservableObject {
             }
 
             let view = Ghostty.SurfaceView(app, baseConfig: config)
+            if let alias = leaf.sshAlias {
+                // Keep the ssh tag so a re-capture of the restored session is
+                // recorded as ssh:<alias> regardless of process state.
+                taggedSSHAliases[view.id] = alias
+            }
             if leaf.scrollbackFile != nil || leaf.sshAlias != nil {
                 pendingRestores[view.id] = .init(file: leaf.scrollbackFile, ssh: leaf.sshAlias)
             }

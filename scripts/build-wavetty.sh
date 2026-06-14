@@ -13,7 +13,8 @@
 # keeps `git rebase upstream/main` clean.
 #
 # Usage:
-#   scripts/build-wavetty.sh          # build only
+#   scripts/build-wavetty.sh          # build only (ReleaseFast)
+#   scripts/build-wavetty.sh --debug  # build only (Debug optimize)
 #   scripts/build-wavetty.sh --dmg    # build + DMG
 #   scripts/build-wavetty.sh --release  # build + DMG + GitHub release upload
 
@@ -29,7 +30,7 @@ SIGNING_IDENTITY="Developer ID Application: MODIN COMPANY (8AC9KUZJ5P)"
 NOTARY_PROFILE="modin-notary"
 ENTITLEMENTS="macos/GhosttyReleaseLocal.entitlements"
 GITHUB_REPO="withwave/wavetty"
-RELEASE_TAG="v1.3.2-withwave"
+RELEASE_TAG="v1.4.4-withwave"
 
 # Use brew zig@0.15 (patched for Xcode 26.4)
 export PATH="/opt/homebrew/opt/zig@0.15/bin:$PATH"
@@ -39,10 +40,12 @@ export PATH="/opt/homebrew/opt/zig@0.15/bin:$PATH"
 # ---------------------------------------------------------------------------
 MAKE_DMG=0
 DO_RELEASE=0
+OPTIMIZE=ReleaseFast
 for arg in "$@"; do
     case "$arg" in
         --dmg)     MAKE_DMG=1 ;;
         --release) MAKE_DMG=1; DO_RELEASE=1 ;;
+        --debug)   OPTIMIZE=Debug ;;
         *) echo "Unknown arg: $arg"; exit 1 ;;
     esac
 done
@@ -108,8 +111,8 @@ if [ -d "$ICON_DIR" ] && [ -d "$ASSET_DIR" ]; then
     rm -rf "$ROOT/macos/build" "$ROOT/.zig-cache" 2>/dev/null
 fi
 
-echo "==> Step 1: zig build (ReleaseFast)"
-zig build -Doptimize=ReleaseFast
+echo "==> Step 1: zig build ($OPTIMIZE)"
+zig build -Doptimize=$OPTIMIZE
 restore_sources
 [ -x "$BUILD_APP/Contents/MacOS/ghostty" ] || { echo "Build failed: binary missing"; exit 1; }
 
