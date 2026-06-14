@@ -90,6 +90,12 @@ final class SSHHostStore: ObservableObject {
     func existingMatch(for uri: SSHURIParser.Parsed) -> SSHHost? {
         if let explicit = uri.explicitAlias,
            let h = hosts.first(where: { $0.alias == explicit }) { return h }
+        // `ssh <alias>` puts the config alias itself in uri.host, while the
+        // host's config.hostName is the resolved name (e.g. alias
+        // "edge-192.168.0.4" → HostName 192.168.0.4). Match the alias directly
+        // first so these are recognized (the hostName/user/port comparison below
+        // would otherwise miss them).
+        if let h = hosts.first(where: { $0.alias == uri.host }) { return h }
         return hosts.first { h in
             (h.config.hostName ?? h.alias) == uri.host &&
             (h.config.user ?? "") == (uri.user ?? "") &&
@@ -257,7 +263,10 @@ final class SSHHostStore: ObservableObject {
     /// Opens a new tab (or new window) running `ssh <alias>` directly as
     /// the surface's command.
     func connect(_ host: SSHHost) {
-        _ = open(host, inNewWindow: false)
+        // Clicking a host entry (menu bar, Dock, command palette, host manager)
+        // opens it in its own new window. The "New Tab to Current SSH Host"
+        // (⇧⌘T) path opens a tab instead — see openSSHTabFromFocused().
+        _ = open(host, inNewWindow: true)
     }
 
     /// Opens `ssh <alias>` as a surface command, in a new tab or a new window.
@@ -287,6 +296,14 @@ final class SSHHostStore: ObservableObject {
         }
 
         recordConnection(host.alias)
+        // Tag the new surface(s) as this ssh host so the session is recorded as
+        // ssh:<alias> even if the user disconnects before a sweep runs (live
+        // process inspection would otherwise see a plain shell by then).
+        if let controller {
+            for view in controller.surfaceTree {
+                SessionHistoryStore.shared.noteSSHSession(surfaceID: view.id, alias: host.alias)
+            }
+        }
         // Capture the session shortly after the ssh process is up so a quick
         // force-kill still records it (the periodic sweep also covers this).
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
@@ -356,9 +373,12 @@ final class SSHHostStore: ObservableObject {
               let controller = window.windowController as? BaseTerminalController,
               let surfaceView = controller.focusedSurface,
               let surface = surfaceView.surface,
-              let alias = sshAlias(forSurface: surface) else {
+              let alias = sshAlias(forSurface: surface),
+              let host = hosts.first(where: { $0.alias == alias }) else {
             return false
         }
-        return connect(alias: alias)
+        // Explicitly a tab in the current window (unlike connect()'s new window).
+        open(host, inNewWindow: false)
+        return true
     }
 }

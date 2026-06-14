@@ -230,6 +230,10 @@ class AppDelegate: NSObject,
         // Wavetty: add the top-level "SSH" menu (built in code, no xib edit).
         SSHMenuController.shared.install()
 
+        // Wavetty: add the top-level "Recent" menu (recent windows) to the menu
+        // bar, mirroring the Dock menu's Recent Windows section.
+        RecentWindowsMenuController.shared.install()
+
         // Register our service provider. This must happen after everything is initialized.
         NSApp.servicesProvider = ServiceProvider()
 
@@ -1120,18 +1124,35 @@ extension AppDelegate {
         let windows = MainActor.assumeIsolated { SessionHistoryStore.shared.recentWindows }
         if !windows.isEmpty {
             dockMenu.addItem(.separator())
-            let header = NSMenuItem(title: "Recent Windows", action: nil, keyEquivalent: "")
+            let header = NSMenuItem(title: "Recent Windows  (클릭=복원, ⌥옵션+클릭=삭제)", action: nil, keyEquivalent: "")
             header.isEnabled = false
             dockMenu.addItem(header)
             for window in windows {
-                let item = NSMenuItem(title: window.displayName, action: nil, keyEquivalent: "")
-                // Wavetty: custom view — click = restore, hover x button = remove.
-                item.view = RecentWindowMenuItemView(
-                    recentWindow: window,
-                    onRestore: { [weak self] in self?.restoreRecentWindow(window) },
-                    onRemove:  { [weak self] in self?.removeRecentWindow(window) }
-                )
+                // Click the row to restore. Holding ⌥ swaps the row to a delete
+                // action (Finder-style alternate item) — see the header hint.
+                let item = NSMenuItem(
+                    title: window.displayName,
+                    action: #selector(restoreRecentWindow(_:)),
+                    keyEquivalent: "")
+                item.target = self
+                item.representedObject = window
+                item.keyEquivalentModifierMask = []   // primary shows with no modifier
+                item.setImageIfDesired(systemSymbolName: window.isSSH ? "network" : "macwindow")
                 dockMenu.addItem(item)
+
+                // Option-key alternate: holding ⌥ turns the row into delete.
+                // Same (empty) key equivalent + isAlternate so AppKit swaps them
+                // based on the ⌥ modifier.
+                let removeItem = NSMenuItem(
+                    title: "Remove “\(window.displayName)” from List",
+                    action: #selector(removeRecentWindow(_:)),
+                    keyEquivalent: "")
+                removeItem.target = self
+                removeItem.representedObject = window
+                removeItem.isAlternate = true
+                removeItem.keyEquivalentModifierMask = .option
+                removeItem.setImageIfDesired(systemSymbolName: "trash")
+                dockMenu.addItem(removeItem)
             }
         }
 
@@ -1167,15 +1188,6 @@ extension AppDelegate {
 
     @objc private func removeRecentWindow(_ sender: NSMenuItem) {
         guard let window = sender.representedObject as? RecentWindow else { return }
-        MainActor.assumeIsolated { SessionHistoryStore.shared.remove(id: window.id) }
-    }
-
-    // Called from custom menu item view (not @objc sender-based).
-    fileprivate func restoreRecentWindow(_ window: RecentWindow) {
-        MainActor.assumeIsolated { SessionHistoryStore.shared.restore(window) }
-    }
-
-    fileprivate func removeRecentWindow(_ window: RecentWindow) {
         MainActor.assumeIsolated { SessionHistoryStore.shared.remove(id: window.id) }
     }
 
