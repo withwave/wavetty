@@ -1124,24 +1124,13 @@ extension AppDelegate {
             header.isEnabled = false
             dockMenu.addItem(header)
             for window in windows {
-                let item = NSMenuItem(
-                    title: window.displayName,
-                    action: #selector(restoreRecentWindow(_:)),
-                    keyEquivalent: "")
-                item.target = self
-                item.representedObject = window
-                item.setImageIfDesired(systemSymbolName: window.isSSH ? "network" : "macwindow")
-                // Wavetty: submenu with Restore + Remove so user can delete entries.
-                let sub = NSMenu()
-                let restore = NSMenuItem(title: "Restore", action: #selector(restoreRecentWindow(_:)), keyEquivalent: "")
-                restore.target = self
-                restore.representedObject = window
-                sub.addItem(restore)
-                let remove = NSMenuItem(title: "Remove from List", action: #selector(removeRecentWindow(_:)), keyEquivalent: "")
-                remove.target = self
-                remove.representedObject = window
-                sub.addItem(remove)
-                item.submenu = sub
+                let item = NSMenuItem(title: window.displayName, action: nil, keyEquivalent: "")
+                // Wavetty: custom view — click = restore, hover x button = remove.
+                item.view = RecentWindowMenuItemView(
+                    recentWindow: window,
+                    onRestore: { [weak self] in self?.restoreRecentWindow(window) },
+                    onRemove:  { [weak self] in self?.removeRecentWindow(window) }
+                )
                 dockMenu.addItem(item)
             }
             dockMenu.addItem(.separator())
@@ -1187,6 +1176,15 @@ extension AppDelegate {
 
     @objc func showRecentSessions() {
         MainActor.assumeIsolated { RecentSessionsWindowController.show() }
+    }
+
+    // Called from custom menu item view (not @objc sender-based).
+    fileprivate func restoreRecentWindow(_ window: RecentWindow) {
+        MainActor.assumeIsolated { SessionHistoryStore.shared.restore(window) }
+    }
+
+    fileprivate func removeRecentWindow(_ window: RecentWindow) {
+        MainActor.assumeIsolated { SessionHistoryStore.shared.remove(id: window.id) }
     }
 
     /// Setup all the images for our menu items.
