@@ -134,6 +134,13 @@ final class SessionHistoryStore: ObservableObject {
         taggedSSHAliases[surfaceID] = alias
     }
 
+    /// Maps each live tab window to the recent entry it currently belongs to, so
+    /// a window that gains or loses a tab updates that single entry instead of
+    /// leaving behind one entry per tab count. Keyed per tab window (not per tab
+    /// group) so it survives the no-group → group transition that happens when a
+    /// window's first extra tab is opened. Pruned to live windows each sweep.
+    private var windowEntryIDs: [ObjectIdentifier: UUID] = [:]
+
     private init() {
         recentWindows = Self.load()
 
@@ -216,6 +223,15 @@ final class SessionHistoryStore: ObservableObject {
             taggedSSHAliases = taggedSSHAliases.filter { liveSurfaceIDs.contains($0.key) }
         }
 
+        // Prune window→entry mappings down to windows that still exist.
+        if !windowEntryIDs.isEmpty {
+            var liveWindowIDs: Set<ObjectIdentifier> = []
+            for window in NSApp.windows where window.windowController is TerminalController {
+                liveWindowIDs.insert(ObjectIdentifier(window))
+            }
+            windowEntryIDs = windowEntryIDs.filter { liveWindowIDs.contains($0.key) }
+        }
+
         var changed = false
         for key in order {
             // Skip windows the user explicitly removed (until they close).
@@ -247,7 +263,29 @@ final class SessionHistoryStore: ObservableObject {
 
         let entry = RecentWindow(
             id: UUID(), lastUsed: Date(), frame: WindowFrame(frameWindow.frame), tabs: tabs)
-        return upsert(entry, save: save)
+        let newSignature = entry.signature
+
+        // This same live window may already have an entry from when it had a
+        // different tab count. Drop those now-stale entries so the window keeps
+        // a single, latest entry instead of accumulating one per tab count.
+        let memberKeys = tabWindows.map { ObjectIdentifier($0) }
+        let staleIDs = Set(memberKeys.compactMap { windowEntryIDs[$0] }).filter { id in
+            guard let existing = recentWindows.first(where: { $0.id == id }) else { return false }
+            return existing.signature != newSignature
+        }
+        var removedStale = false
+        if !staleIDs.isEmpty {
+            recentWindows.removeAll { staleIDs.contains($0.id) }
+            removedStale = true
+        }
+
+        let changed = upsert(entry, save: false)
+        // Remember which entry this window now maps to (the deduped/inserted one).
+        if let entryID = recentWindows.first(where: { $0.signature == newSignature })?.id {
+            for key in memberKeys { windowEntryIDs[key] = entryID }
+        }
+        if (changed || removedStale) && save { Self.save(recentWindows) }
+        return changed || removedStale
     }
 
     /// Walks a live split-tree node into our serializable `SessionNode`.
