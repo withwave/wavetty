@@ -198,6 +198,14 @@ final class SessionHistoryStore: ObservableObject {
 
     /// Groups open terminal windows by tab group and snapshots each group.
     private func sweepAllWindows() {
+        // Don't capture mid-restore. Rebuilding a multi-tab window briefly
+        // passes through 1-tab states (makeKeyAndOrderFront fires resignKey on
+        // the previous window before the other tabs are attached); capturing or
+        // mutating store state during that window corrupts the entry and can
+        // disrupt the tab attachment itself. A single capture runs after the
+        // restore completes.
+        guard restoringIDs.isEmpty else { return }
+
         var groups: [ObjectIdentifier: NSWindow] = [:]
         var order: [ObjectIdentifier] = []
         for window in NSApp.windows {
@@ -478,10 +486,11 @@ final class SessionHistoryStore: ObservableObject {
         // rapidly clicking the same item before the first restore finishes.
         guard !restoringIDs.contains(window.id) else { return }
 
-        // If a window with the same content is already open, focus it instead
-        // of opening a duplicate. Same signature == same tabs/dirs/splits/hosts,
-        // which is exactly how recents dedupe (see upsert).
-        if let live = liveWindow(matching: window) {
+        // If a SINGLE-tab window with the same content is already open, focus it
+        // instead of opening a duplicate. Multi-tab windows are always rebuilt
+        // fresh: focus-matching here risks landing on a partial / different
+        // window and skipping the remaining tabs entirely.
+        if window.tabs.count <= 1, let live = liveWindow(matching: window) {
             if let group = live.tabGroup, group.selectedWindow !== live {
                 group.selectedWindow = live
             }
@@ -526,6 +535,9 @@ final class SessionHistoryStore: ObservableObject {
             self.processPendingRestores()
             // Allow restoring this window again (e.g. if the user closed it).
             self.restoringIDs.remove(window.id)
+            // Capture the fully-rebuilt window once (sweeps were suppressed
+            // during restore), so the recents entry reflects all its tabs.
+            self.captureNow()
         }
     }
 
