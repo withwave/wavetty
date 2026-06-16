@@ -486,11 +486,13 @@ final class SessionHistoryStore: ObservableObject {
         // rapidly clicking the same item before the first restore finishes.
         guard !restoringIDs.contains(window.id) else { return }
 
-        // If a SINGLE-tab window with the same content is already open, focus it
-        // instead of opening a duplicate. Multi-tab windows are always rebuilt
-        // fresh: focus-matching here risks landing on a partial / different
-        // window and skipping the remaining tabs entirely.
-        if window.tabs.count <= 1, let live = liveWindow(matching: window) {
+        // If a window with the same content (single- or multi-tab) is already
+        // open, focus it instead of opening a duplicate. Skip ambiguous (∅)
+        // signatures — windows whose directory couldn't be resolved — so we
+        // never focus the wrong window; those always restore fresh. (The
+        // mid-restore capture that previously corrupted multi-tab restores is
+        // now blocked by the restoringIDs guard in sweepAllWindows.)
+        if !window.signature.contains("∅"), let live = liveWindow(matching: window) {
             if let group = live.tabGroup, group.selectedWindow !== live {
                 group.selectedWindow = live
             }
