@@ -718,7 +718,27 @@ final class SessionHistoryStore: ObservableObject {
         // Collapse any historical duplicates (older files predate signature
         // dedup). Stored most-recent-first, so keep the first of each signature.
         var seen = Set<String>()
-        return decoded.filter { seen.insert($0.signature).inserted }
+        let deduped = decoded.filter { seen.insert($0.signature).inserted }
+        // Then collapse tab-growth clutter: the same window captured at 1, 2, 3…
+        // tabs (before a tab change updated a single entry) shows up as the same
+        // folder repeated. Applied only here (at load, no windows open yet) so
+        // we never drop an entry for a currently-open window.
+        return collapseTabGrowth(deduped)
+    }
+
+    /// Removes entries that are an earlier growth-stage of another: if one
+    /// entry's tab signatures are a prefix of another's (same dirs/hosts in
+    /// order, fewer tabs), keep only the longer (most complete) one. Cleans up
+    /// the "same folder listed once per tab count" clutter.
+    private static func collapseTabGrowth(_ windows: [RecentWindow]) -> [RecentWindow] {
+        let sigLists = windows.map { w in w.tabs.map { $0.root.signature } }
+        return windows.enumerated().filter { (i, _) in
+            let mine = sigLists[i]
+            // Keep unless some other entry is a strictly longer prefix-extension.
+            return !sigLists.enumerated().contains { (j, other) in
+                j != i && other.count > mine.count && Array(other.prefix(mine.count)) == mine
+            }
+        }.map { $0.element }
     }
 
     private static func save(_ windows: [RecentWindow]) {
