@@ -248,9 +248,14 @@ final class SessionHistoryStore: ObservableObject {
         if changed { Self.save(recentWindows) }
     }
 
+    /// Tab-entry ids whose live window just shrank; a deferred re-check decides
+    /// whether it was a tab close (window survives → apply the shrink) or a
+    /// window close (window gone → keep the full entry for restore).
+    private var pendingShrinkReeval: Set<UUID> = []
+
     /// Snapshots one window/tab-group into a single `RecentWindow` entry.
     @discardableResult
-    private func snapshotGroup(anyWindow: NSWindow, save: Bool) -> Bool {
+    private func snapshotGroup(anyWindow: NSWindow, save: Bool, allowShrink: Bool = false) -> Bool {
         // Ordered tab windows (a single window has no tabGroup or a group of one).
         let tabWindows: [NSWindow]
         if let group = anyWindow.tabGroup {
@@ -275,17 +280,20 @@ final class SessionHistoryStore: ObservableObject {
         let memberKeys = tabWindows.map { ObjectIdentifier($0) }
         let mappedIDs = Set(memberKeys.compactMap { windowEntryIDs[$0] })
 
-        // If this window already maps to an entry with MORE tabs than we see
-        // now, it is shrinking — overwhelmingly because the window is being
-        // closed and its tabs close one-by-one, each firing a capture with a
-        // smaller count (ending at 1). Keep the larger entry so a closed
-        // multi-tab window stays restorable at full size. (Real shrinkage from
-        // closing a single tab while keeping the window open only over-counts
-        // by the closed tab, which is harmless.)
-        if mappedIDs.contains(where: { id in
-            (recentWindows.first { $0.id == id }?.tabs.count ?? 0) > tabs.count
-        }) {
-            return false
+        // This window maps to an entry with MORE tabs than we see now, so it is
+        // shrinking. We can't yet tell a single-tab close (window survives →
+        // the closed tab + its scrollback should be dropped) from a window close
+        // (tabs close one-by-one, each a smaller capture ending at 1 → we must
+        // keep the full entry for restore). Defer: don't overwrite now; a
+        // re-check decides once the close settles (see scheduleShrinkReeval).
+        if !allowShrink {
+            let largerMapped = mappedIDs.filter { id in
+                (recentWindows.first { $0.id == id }?.tabs.count ?? 0) > tabs.count
+            }
+            if !largerMapped.isEmpty {
+                largerMapped.forEach { scheduleShrinkReeval(mappedID: $0) }
+                return false
+            }
         }
 
         // This same live window may already have an entry from when it had a
@@ -308,6 +316,25 @@ final class SessionHistoryStore: ObservableObject {
         }
         if (changed || removedStale) && save { Self.save(recentWindows) }
         return changed || removedStale
+    }
+
+    /// After a window shrinks, wait for the close to settle and decide: if a
+    /// live window still maps to this entry, the user closed a single tab and
+    /// kept the window — re-capture it at its current (smaller) size so the
+    /// closed tab and its scrollback are dropped and won't be restored. If no
+    /// live window maps to it, the whole window was closed — leave the full
+    /// entry intact so it can be restored with all its tabs.
+    private func scheduleShrinkReeval(mappedID: UUID) {
+        guard pendingShrinkReeval.insert(mappedID).inserted else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self else { return }
+            self.pendingShrinkReeval.remove(mappedID)
+            guard let survivor = NSApp.windows.first(where: { w in
+                w.windowController is TerminalController &&
+                self.windowEntryIDs[ObjectIdentifier(w)] == mappedID
+            }) else { return }
+            self.snapshotGroup(anyWindow: survivor, save: true, allowShrink: true)
+        }
     }
 
     /// Walks a live split-tree node into our serializable `SessionNode`.
