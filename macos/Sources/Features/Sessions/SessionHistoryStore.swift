@@ -517,11 +517,21 @@ final class SessionHistoryStore: ObservableObject {
             primary.showWindow(nil)
             primaryWindow.makeKeyAndOrderFront(nil)
 
-            // Remaining tabs join the primary window's tab group.
+            // Remaining tabs join the primary window's tab group. This mirrors
+            // TerminalController.newTab: creating a terminal window while the
+            // primary is key makes macOS auto-add it to the primary's tab group;
+            // we must remove it before our explicit add or AppKit's
+            // tabbedWindows state gets corrupted and the tabs end up as separate
+            // (1-tab) windows — which then capture as a single-tab entry.
             for tab in window.tabs.dropFirst() {
                 let tree = SplitTree(root: self.buildNode(tab.root, app: app), zoomed: nil)
                 let controller = TerminalController(appDelegate.ghostty, withSurfaceTree: tree)
-                if let tabWindow = controller.window {
+                guard let tabWindow = controller.window else { continue }
+                if let group = primaryWindow.tabGroup,
+                   group.windows.firstIndex(of: tabWindow) != nil {
+                    group.removeWindow(tabWindow)
+                }
+                if tabWindow.tabbingMode != .disallowed {
                     primaryWindow.addTabbedWindowSafely(tabWindow, ordered: .above)
                 }
             }
@@ -535,11 +545,32 @@ final class SessionHistoryStore: ObservableObject {
 
             // Inject color scrollback + start ssh once surfaces attach.
             self.processPendingRestores()
-            // Allow restoring this window again (e.g. if the user closed it).
-            self.restoringIDs.remove(window.id)
-            // Capture the fully-rebuilt window once (sweeps were suppressed
-            // during restore), so the recents entry reflects all its tabs.
-            self.captureNow()
+            // Capture only once the tab group reflects the full tab count (sweeps
+            // stay blocked via restoringIDs until then), so we never record a
+            // transient 1-tab state.
+            self.captureRestoredWindowWhenSettled(
+                primaryWindow, id: window.id, expectedTabs: window.tabs.count, attempts: 0)
+        }
+    }
+
+    /// Polls until the restored window's tab group has all its tabs, then clears
+    /// the restore guard and captures. Avoids recording a half-built (1-tab)
+    /// state while still guaranteeing the guard is cleared on failure.
+    private func captureRestoredWindowWhenSettled(
+        _ primaryWindow: NSWindow, id: UUID, expectedTabs: Int, attempts: Int
+    ) {
+        let liveTabs = (primaryWindow.tabGroup?.windows ?? [primaryWindow])
+            .filter { $0.windowController is TerminalController }.count
+        if liveTabs >= expectedTabs || attempts >= 40 {
+            restoringIDs.remove(id)
+            captureNow()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self, weak primaryWindow] in
+            guard let self else { return }
+            guard let primaryWindow else { self.restoringIDs.remove(id); return }
+            self.captureRestoredWindowWhenSettled(
+                primaryWindow, id: id, expectedTabs: expectedTabs, attempts: attempts + 1)
         }
     }
 

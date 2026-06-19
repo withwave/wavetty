@@ -167,6 +167,22 @@ extension Ghostty {
         override var surface: ghostty_surface_t? {
             surfaceModel?.unsafeCValue
         }
+
+        /// Wavetty: the folder name of the surface's working directory (OSC 7
+        /// pwd, else the foreground process CWD queried from the OS), or nil.
+        /// Used as a fallback window/tab title when the shell sets no title.
+        func pwdFolderName() -> String? {
+            var dir = pwd
+            if (dir ?? "").isEmpty, let surface = self.surface {
+                var buf = [CChar](repeating: 0, count: 4096)
+                if ghostty_surface_pwd(surface, &buf, 4096) > 0 {
+                    dir = String(cString: buf)
+                }
+            }
+            guard let dir, !dir.isEmpty else { return nil }
+            let name = (dir as NSString).lastPathComponent
+            return name.isEmpty ? nil : name
+        }
         /// Current scrollbar state, cached here for persistence across rebuilds
         /// of the SwiftUI view hierarchy, for example when changing splits
         var scrollbar: Ghostty.Action.Scrollbar?
@@ -273,11 +289,13 @@ extension Ghostty {
                 return String(cString: text.text)
             }
 
-            // Set a timer to show the ghost emoji after 500ms if no title is set
+            // Set a fallback title after 500ms if the shell hasn't set one.
+            // Wavetty: prefer the working directory's folder name so windows and
+            // tabs stay identifiable; fall back to the wave emoji only when no
+            // pwd is available.
             titleFallbackTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
-                if let self = self, self.title.isEmpty {
-                    self.title = "🌊"
-                }
+                guard let self, self.title.isEmpty else { return }
+                self.title = self.pwdFolderName() ?? "🌊"
             }
 
             // Before we initialize the surface we want to register our notifications
