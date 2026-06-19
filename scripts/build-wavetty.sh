@@ -30,7 +30,7 @@ SIGNING_IDENTITY="Developer ID Application: MODIN COMPANY (8AC9KUZJ5P)"
 NOTARY_PROFILE="modin-notary"
 ENTITLEMENTS="macos/GhosttyReleaseLocal.entitlements"
 GITHUB_REPO="withwave/wavetty"
-RELEASE_TAG="v1.4.8-withwave"
+RELEASE_TAG="v1.4.9-withwave"
 
 # Use brew zig@0.15 (patched for Xcode 26.4)
 export PATH="/opt/homebrew/opt/zig@0.15/bin:$PATH"
