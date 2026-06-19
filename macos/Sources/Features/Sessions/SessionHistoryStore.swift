@@ -169,9 +169,8 @@ final class SessionHistoryStore: ObservableObject {
     // MARK: - Recording
 
     @objc private func windowWillClose(_ note: Notification) {
-        // The closing window's last good snapshot already lives in the list
-        // (from the periodic sweep); just refresh whatever remains open. We
-        // never delete entries on close, so the closed window stays reopenable.
+        // A closing multi-tab window drops its tabs one-by-one; snapshotGroup's
+        // "don't shrink" guard keeps the full-size entry through that cascade.
         sweepAllWindows()
     }
 
@@ -273,11 +272,26 @@ final class SessionHistoryStore: ObservableObject {
             id: UUID(), lastUsed: Date(), frame: WindowFrame(frameWindow.frame), tabs: tabs)
         let newSignature = entry.signature
 
+        let memberKeys = tabWindows.map { ObjectIdentifier($0) }
+        let mappedIDs = Set(memberKeys.compactMap { windowEntryIDs[$0] })
+
+        // If this window already maps to an entry with MORE tabs than we see
+        // now, it is shrinking — overwhelmingly because the window is being
+        // closed and its tabs close one-by-one, each firing a capture with a
+        // smaller count (ending at 1). Keep the larger entry so a closed
+        // multi-tab window stays restorable at full size. (Real shrinkage from
+        // closing a single tab while keeping the window open only over-counts
+        // by the closed tab, which is harmless.)
+        if mappedIDs.contains(where: { id in
+            (recentWindows.first { $0.id == id }?.tabs.count ?? 0) > tabs.count
+        }) {
+            return false
+        }
+
         // This same live window may already have an entry from when it had a
         // different tab count. Drop those now-stale entries so the window keeps
         // a single, latest entry instead of accumulating one per tab count.
-        let memberKeys = tabWindows.map { ObjectIdentifier($0) }
-        let staleIDs = Set(memberKeys.compactMap { windowEntryIDs[$0] }).filter { id in
+        let staleIDs = mappedIDs.filter { id in
             guard let existing = recentWindows.first(where: { $0.id == id }) else { return false }
             return existing.signature != newSignature
         }
