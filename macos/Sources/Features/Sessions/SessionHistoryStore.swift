@@ -169,8 +169,11 @@ final class SessionHistoryStore: ObservableObject {
     // MARK: - Recording
 
     @objc private func windowWillClose(_ note: Notification) {
-        // A closing multi-tab window drops its tabs one-by-one; snapshotGroup's
-        // "don't shrink" guard keeps the full-size entry through that cascade.
+        // A closing multi-tab window drops its tabs one-by-one, so every
+        // capture here sees fewer tabs. snapshotGroup never applies a shrink
+        // directly; it defers to scheduleShrinkReeval, which keeps the
+        // full-size entry when no live window survives (window close) and
+        // re-captures smaller when one does (single tab close).
         sweepAllWindows()
     }
 
@@ -329,7 +332,11 @@ final class SessionHistoryStore: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self else { return }
             self.pendingShrinkReeval.remove(mappedID)
+            // `isVisible` matters: a closed window can linger in NSApp.windows
+            // until it is released, and treating one as a survivor would read a
+            // whole-window close as a tab close and truncate the entry.
             guard let survivor = NSApp.windows.first(where: { w in
+                w.isVisible &&
                 w.windowController is TerminalController &&
                 self.windowEntryIDs[ObjectIdentifier(w)] == mappedID
             }) else { return }
@@ -545,14 +552,16 @@ final class SessionHistoryStore: ObservableObject {
         guard let appDelegate = NSApp.delegate as? AppDelegate,
               let app = appDelegate.ghostty.app,
               !window.tabs.isEmpty else { return }
-        restoringIDs.insert(window.id)
-
         // First tab becomes the primary window. A plain controller init does
         // not present its window (unlike newWindow/newTab which schedule it),
         // so we explicitly show + order front here.
         let firstTree = SplitTree(root: buildNode(window.tabs[0].root, app: app), zoomed: nil)
         let primary = TerminalController(appDelegate.ghostty, withSurfaceTree: firstTree)
+        // Set the guard only once the restore is certain to proceed: an early
+        // return past it would leave the id stuck in restoringIDs, blocking
+        // every later restore of this entry (and all sweeps) for the app's life.
         guard let primaryWindow = primary.window else { return }
+        restoringIDs.insert(window.id)
 
         DispatchQueue.main.async {
             primary.showWindow(nil)

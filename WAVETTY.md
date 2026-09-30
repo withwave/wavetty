@@ -70,7 +70,7 @@ Anything Wavetty-only lives in a new subdirectory of `macos/Sources/Features/`:
 |---|---|
 | GitHub Release update checker | `macos/Sources/Features/Update/WavettyUpdateChecker.swift` |
 | SSH host management | `macos/Sources/Features/Hosts/` (SSHHostStore, SSHConfigParser, SSHURIParser, SSHHostMetadata, SSHHostManagerView, SSHMenuController, SSHProcessInspector, SSHKeychain, SSHAskpass) |
-| Recent-window session recovery | `macos/Sources/Features/Sessions/SessionHistoryStore.swift` |
+| Recent-window session recovery | `macos/Sources/Features/Sessions/` (SessionHistoryStore, RecentWindowsMenuController) |
 
 **Session recovery** (`SessionHistoryStore`): snapshots open terminal windows
 (tabs + split tree + frame) on a 15s timer, on window close, on resign-key, and
@@ -120,11 +120,23 @@ Many remaining "Ghostty" strings (NSAlert text, etc.) are patched
 **post-build** by `scripts/build-wavetty.sh` so the source files stay clean.
 See §5.
 
-### 3.3 Never modify the Zig core
+### 3.3 Modify the Zig core only as a last resort
 
-Anything in `src/` is upstream. The C ABI in `include/ghostty.h` is upstream.
-The macOS bridge (`macos/Sources/Ghostty/Ghostty.*.swift`) is upstream — touch
-only when absolutely necessary, and only with a tiny diff.
+Anything in `src/` is upstream, as is the C ABI in `include/ghostty.h` and the
+macOS bridge (`macos/Sources/Ghostty/*.swift`). Touch them only when a feature
+is impossible from Swift, and only with a tiny, clearly marked diff.
+
+Every such edit carries a `// Wavetty:` comment and must be re-applied by hand
+if a rebase drops it. The complete current list:
+
+| File | Wavetty change | Why it can't live in Swift |
+|---|---|---|
+| `src/apprt/embedded.zig` | `ghostty_surface_dump_scrollback_styled` (dumps scrollback as VT/SGR so colors survive) and `ghostty_surface_write_styled_to_screen` (writes bytes through the VT parser, so injected text renders styled without touching the PTY) | Both need terminal-internal state the C ABI didn't expose |
+| `include/ghostty.h` | declarations for the two functions above | C ABI header for the same |
+| `src/termio/Exec.zig` | write buffer enlarged 64 → 4096 bytes; a partial chunk no longer forces a flush boundary | Restoring a large scrollback through the VT stream was pathologically slow at 64-byte chunks |
+
+Session recovery (§4.4) depends on all three — if a rebase drops them the app
+still builds but restored sessions lose their color scrollback.
 
 ### 3.4 Never modify `project.pbxproj` or `build.zig`
 
@@ -223,6 +235,74 @@ Connection mechanism: `Ghostty.SurfaceConfiguration.command = "ssh \(alias)"`
 + `waitAfterCommand = true`. Ghostty exec's ssh directly as the surface
 process — no shell-injection timing race.
 
+### 4.4 Session recovery + Recent Windows
+
+Files: `macos/Sources/Features/Sessions/SessionHistoryStore.swift`,
+`RecentWindowsMenuController.swift`.
+
+`SessionHistoryStore` is the single source of truth for the recents list,
+persisted to `recent-windows.json` (LRU, capped at 16 entries).
+
+**Capture.** Event-driven only, no periodic timer (dumping scrollback isn't
+cheap): window close, app termination, window resign-key, and a child process
+exit (`.wavettyChildExited`, posted from `OSSurfaceView`, catches an ssh
+disconnect while the final screen is still on the surface). Each capture walks
+a window's tab group → tabs → split tree into a `SessionNode`, recording each
+leaf's working directory or ssh alias, plus the window frame.
+
+**Scrollback.** Each leaf's color-preserving scrollback is dumped via
+`ghostty_surface_dump_scrollback_styled` into
+`Application Support/<bundleID>/scrollback/<surface-uuid>.ansi`. The file is
+keyed by **surface UUID** — keying by host/dir made two tabs in the same
+directory share one file, so restoring one tab showed the other's output.
+Files no longer referenced by a retained entry are pruned on every save
+(`cleanupOrphanScrollback`).
+
+**Dedup.** Entries are deduped by a frame-independent content signature
+(dirs / ssh aliases / split layout, in tab order). `windowEntryIDs` maps each
+live tab window to the entry it owns so gaining or losing a tab updates that
+one entry instead of appending a new one per tab count. At load,
+`collapseTabGrowth` drops entries whose tab signatures are a strict prefix of
+another's — historical "same folder, once per tab count" clutter.
+
+**Tab close vs. window close.** A closing multi-tab window drops its tabs one
+at a time, so both cases look identical at capture time: fewer tabs than the
+stored entry. `snapshotGroup` therefore never applies a shrink directly; it
+defers via `scheduleShrinkReeval`, which re-checks 0.6s later — a *visible*
+live window still mapped to the entry means a single tab was closed (re-capture
+smaller, dropping the closed tab and its scrollback), no survivor means the
+whole window closed (keep the full entry so it restores with all tabs).
+
+**Restore.** `restore(_:)` focuses an already-open window with the same
+signature instead of duplicating it; otherwise it rebuilds tab 1 as the primary
+window, then attaches the remaining tabs (removing AppKit's own auto-tabbing
+first, exactly as `TerminalController.newTab` does — skipping that scatters the
+tabs into separate 1-tab windows). Scrollback injection and `ssh <alias>` start
+happen *after* each surface attaches (`processPendingRestores`), so nothing is
+echoed into the screen and re-captured. `restoringIDs` blocks re-entrant
+restores and suppresses captures until the tab group has settled.
+
+**UI.** Two entry points, both built in code (no xib edits): the Dock menu's
+*Recent Windows* section (`AppDelegate.reloadDockMenu`) and a *Recent Windows*
+submenu under the menu bar's File menu (`RecentWindowsMenuController`). In both,
+click a row to restore; hold ⌥ to swap the row to a delete (Finder-style
+`isAlternate` item). Removing an entry for a still-open window suppresses that
+window from re-capture until it closes.
+
+### 4.5 Window titles are working directories
+
+Upstream titles a window with whatever the shell sets. Wavetty overrides that
+in `BaseTerminalController.applyTitleToWindow`: the title is the focused
+surface's working directory, tilde-abbreviated (`~/AI/ghostty`), refreshed on
+`pwdDidChange`. A user title override (`prompt_tab_title`) still wins, and the
+shell title remains the fallback when no pwd is available.
+
+The reason is the **Dock menu's open-window list**, which AppKit generates
+from `NSWindow.title` and which no API can customize — making the title the
+path is the only way to have that list identify windows the same way the
+Recent Windows section (§4.4) does. `SurfaceView.pwdDisplayPath()` /
+`pwdFolderName()` (in `SurfaceView_AppKit.swift`) provide the strings.
+
 ---
 
 ## 5. Build / Release
@@ -244,6 +324,10 @@ Detailed cert/keychain steps are in `RELEASING-WITHWAVE.md`.
 ```bash
 # Build (no DMG)
 ./scripts/build-wavetty.sh
+
+# Build with a Debug-optimized core (still fully rebranded, unlike a plain
+# `xcodebuild -configuration Debug`, which produces an app named "Ghostty")
+./scripts/build-wavetty.sh --debug
 
 # Build + DMG + notarize (output: zig-out/Wavetty.dmg)
 ./scripts/build-wavetty.sh --dmg
@@ -397,7 +481,9 @@ As of the latest commit:
 - **Bundle ID**: `com.modincompany.wavetty`
 - **Latest release**: see `gh release view --repo withwave/wavetty`
 - **Active features**: rebrand, custom icon, GitHub Release update checker,
-  SSH host management (palette + manager window), end-to-end release script
+  SSH host management (palette + SSH menu + manager window) with Keychain
+  auto-login, session recovery with color scrollback restore (Dock menu +
+  File ▸ Recent Windows), pwd-based window titles, end-to-end release script
 
 ### Files unique to Wavetty
 
@@ -419,19 +505,28 @@ macos/Sources/Features/Hosts/
     SSHHostMetadata.swift
     SSHHostStore.swift
     SSHHostManagerView.swift
+    SSHMenuController.swift                      # code-built top-level SSH menu
+    SSHProcessInspector.swift                    # KERN_PROCARGS2 argv inspection
+    SSHKeychain.swift                            # per-host passwords in login Keychain
+    SSHAskpass.swift                             # SSH_ASKPASS helper for auto-login
+
+macos/Sources/Features/Sessions/
+    SessionHistoryStore.swift                    # capture / restore / persistence
+    RecentWindowsMenuController.swift            # File ▸ Recent Windows submenu
 ```
 
 ### Files modified in upstream (kept small)
 
 ```
-macos/Sources/App/macOS/AppDelegate.swift                          (~6 lines)
+macos/Sources/App/macOS/AppDelegate.swift                         (~50 lines: dock menu sections, launch warmups)
 macos/Sources/Features/Command Palette/CommandPalette.swift        (~10 lines)
 macos/Sources/Features/Command Palette/TerminalCommandPalette.swift (~55 lines)
-macos/Sources/Features/Terminal/BaseTerminalController.swift       (~3 lines)
+macos/Sources/Features/Terminal/BaseTerminalController.swift       (~15 lines: pwd window title)
 macos/Sources/Features/Terminal/Window Styles/Titlebar*.swift       (1 line each)
 macos/Sources/Features/Terminal/Window Styles/*.xib                 (1 string each)
 macos/Sources/Features/QuickTerminal/QuickTerminal.xib              (1 string)
-macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift        (~3 lines)
+macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift        (~30 lines: pwd title helpers)
+macos/Sources/Ghostty/Surface View/OSSurfaceView.swift              (1 line: .wavettyChildExited post)
 macos/Sources/Ghostty/Surface View/SurfaceView_UIKit.swift          (1 line)
 macos/Sources/Features/App Intents/*.swift                          (small)
 macos/Sources/Features/Update/UpdatePopoverView.swift               (1 line)
@@ -463,7 +558,6 @@ upstream code**. Each Wavetty edit is small and stand-alone.
   upstream.
 - **In-UI ssh_config editing**: Editing host blocks risks corrupting the
   user's hand-written formatting. We only append/remove.
-- **Keychain integration for SSH passphrases**: Future work.
 - **iCloud sync of hosts-metadata.json**: Future work.
 
 ---
@@ -512,6 +606,8 @@ Read order for first session:
 3. `scripts/build-wavetty.sh` — the post-build rebranding logic
 4. `macos/Sources/Features/Hosts/SSHHostStore.swift` — example of a
    well-isolated feature
+4b. `macos/Sources/Features/Sessions/SessionHistoryStore.swift` — the most
+   subtle feature (capture/restore lifecycle); read §4.4 first
 5. `macos/Sources/Features/Update/WavettyUpdateChecker.swift` — minimal
    pattern for a Wavetty-specific service
 

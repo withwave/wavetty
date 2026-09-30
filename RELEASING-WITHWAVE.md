@@ -17,6 +17,10 @@ withwave/wavetty 포크는 **Wavetty**라는 별개의 앱으로 빌드/배포�
 # 빌드만
 ./scripts/build-wavetty.sh
 
+# 디버그 빌드(코어를 -Doptimize=Debug로) + 동일한 Wavetty 리브랜딩
+# 순수 `xcodebuild -configuration Debug`는 리브랜딩이 안 돼 "Ghostty"로 뜬다.
+./scripts/build-wavetty.sh --debug
+
 # 빌드 + DMG 생성 + 공증 + Stapler
 ./scripts/build-wavetty.sh --dmg
 

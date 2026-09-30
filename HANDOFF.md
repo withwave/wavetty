@@ -1,38 +1,69 @@
-# 작업 인계 — 2026-06-14 04:30
+# 작업 인계 — 2026-08-28
 
-## 현재 작업
-Wavetty(Ghostty 포크) v1.4.3 — 최근 접속 기록(Recent Windows) 관리 개선.
-스크롤백 잘못된 복원 버그 수정 + Dock 메뉴에 x 삭제 버튼 추가가 완료되어 모두 커밋됨.
-**아직 빌드/설치 검증 + push 가 남음.**
+## 현재 상태
+Wavetty(Ghostty 포크) **v1.4.11-withwave 릴리즈 완료**.
+`HEAD == origin/main == 태그 v1.4.11-withwave`, GitHub Release에 `Wavetty.dmg`
+업로드까지 끝난 상태. (로컬 태그가 v1.4.2까지만 있으면 `git fetch --tags`)
 
-## 최근 결정
-- **스크롤백 파일 키를 host/dir → surface UUID로 변경**: 같은 디렉토리의 여러 탭이 한 .ansi 파일을 공유해 다른 탭 내용이 복원되던 버그 때문. orphan 파일은 `cleanupOrphanScrollback`이 save() 때 정리.
-- **restore() 재진입 가드(`restoringIDs`)**: 같은 항목 더블클릭/연속클릭 시 중복 복원 방지. async 복원 완료 후 ID 제거.
-- **별도 "Recent Sessions 관리 창"은 만들었다가 제거함**: 사용자가 "있는 기능(Dock 메뉴)에 버튼만 추가하면 되는데 왜 창을 만드냐"고 지적 → RecentSessionsView.swift 삭제하고 Dock 메뉴 항목에 커스텀 NSView(x버튼)만 남김.
-- **x 삭제 버튼은 서브메뉴가 아닌 커스텀 NSMenuItem 뷰로 구현**: 사용자가 "클릭=복원, x=삭제가 UI상 깔끔"하다고 요청. `RecentWindowMenuItemView`(NSView) — 클릭=복원, 호버 시 우측 × 페이드인=삭제.
+이번 세션 작업: **문서 최신화 + 코드 결함 3건 수정 + Dock 열린 창 표시 개선**.
+아래 "이번 세션 변경"은 아직 **커밋/빌드검증 전**일 수 있으니 확인할 것.
 
-## 변경 파일 (origin/main 대비, 모두 커밋됨)
-- `VERSION` — 1.4.2 → 1.4.3-withwave
-- `macos/Sources/Features/Sessions/SessionHistoryStore.swift` — surface-UUID 스크롤백 키잉, `remove(id:)`, `cleanupOrphanScrollback`, `restoringIDs` 재진입 가드
-- `macos/Sources/Features/Sessions/RecentWindowMenuItem.swift` (신규) — Dock 메뉴용 커스텀 NSView(x 삭제 버튼)
-- `macos/Sources/App/macOS/AppDelegate.swift` — Dock 메뉴 최근 항목을 `RecentWindowMenuItemView`로 교체, `restoreRecentWindow(_:)`/`removeRecentWindow(_:)` fileprivate 헬퍼
+## 이번 세션 변경 (커밋 전)
+
+### 코드
+- `macos/Sources/Features/Sessions/SessionHistoryStore.swift`
+  - `restore(_:)`의 `restoringIDs.insert`를 `guard let primaryWindow` **뒤로 이동**.
+    이전에는 창 생성 실패 시 ID가 영구히 남아 그 항목의 복원과 모든 sweep이
+    앱 종료 시까지 막혔다.
+  - `scheduleShrinkReeval`의 생존 창 판정에 **`w.isVisible` 추가**. 닫혔지만 아직
+    해제되지 않은 NSWindow를 생존으로 오판하면 "창 전체 닫기"를 "탭 하나 닫기"로
+    처리해 기록이 잘린다.
+  - `windowWillClose`의 stale 주석(1.4.10의 "don't shrink" 설명)을 1.4.11의
+    지연 재평가 방식으로 갱신.
+- `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`
+  - `effectivePwd()` 추출 + `pwdDisplayPath()`(틸드 축약 경로) 추가.
+- `macos/Sources/Features/Terminal/BaseTerminalController.swift`
+  - **창 제목 = 작업 디렉토리 경로**(`~/AI/ghostty`). `wavettyTitleSurface`(weak)로
+    제목 소스 surface를 추적하고 `applyTitleToWindow`에서 pwd 우선 적용,
+    `pwdDidChange`에서 재적용. 사용자 title override > pwd > 셸 제목 순.
+  - **의도**: Dock 메뉴 최상단의 열린 창 목록은 AppKit이 `NSWindow.title`로
+    자동 생성하며 커스터마이즈 API가 없다. 제목 자체를 경로로 만드는 것이
+    그 목록을 Recent Windows 섹션과 같은 표기로 맞추는 유일한 방법.
+
+### 문서
+- `WAVETTY.md`: §3.1 Sessions 파일 목록, §3.3(Zig 코어 수정 금지 → **실제 예외
+  3곳 표로 명시**), §4.4 세션 복구 전체 신설, §4.5 pwd 창 제목 신설, §5.2
+  `--debug`, §8 파일 목록/기능 목록, §10 Keychain 항목 삭제(구현 완료), §12 읽기 순서
+- `RELEASING-WITHWAVE.md`: `--debug` 빌드 설명 추가
+- `HANDOFF.md`: 이 문서(v1.4.3 시점 내용 폐기 후 재작성)
 
 ## 다음 할 일
-- [ ] **`build-wavetty.sh`에 `--debug` 플래그 추가 작업이 중단됨** — 디버그로 컴파일하되 Wavetty 리브랜딩까지 입히는 빌드용. 인자 파싱부에 `OPTIMIZE` 변수 추가하고 `zig build -Doptimize=$OPTIMIZE`로 바꾸려던 참(아래 미해결 참고). 사용자가 "디버깅 테스트 해보자"고 한 직후 중단됨.
-- [ ] 빌드(`./scripts/build-wavetty.sh`) → `/Applications/Wavetty.app` 설치 → 실행
-- [ ] 검증: Dock 아이콘 우클릭 → 최근 항목 호버 시 × 버튼 표시, 클릭=복원, ×=삭제
-- [ ] 검증: 스크롤백이 올바른 세션 내용으로 복원되는지 (다른 디렉토리/SSH 섞임 없는지)
-- [ ] `git push` (origin/main에 로컬 4커밋 푸시)
+- [ ] `PATH="/opt/homebrew/opt/zig@0.15/bin:$PATH" zig build -Doptimize=ReleaseFast`
+      로 컴파일 확인 (기본 PATH의 zig는 0.16이라 build.zig에서 실패함)
+- [ ] `./scripts/build-wavetty.sh` → `/Applications/Wavetty.app` 설치 → 실행
+- [ ] 검증: Dock 아이콘 우클릭 → **상단 열린 창 목록이 `~/경로`로 표시**되는지
+- [ ] 검증: 탭 하나 닫기 → 기록 탭 수 감소 / 창 전체 닫기 → 전체 탭 보존·복원
+- [ ] 커밋 + `./scripts/release-wavetty.sh --bump 1.4.12-withwave` (릴리즈는 요청 시)
 
-## 미해결 / 막힌 곳
-- **`build-wavetty.sh --debug` 작업 미완**: 의도는 `--debug` 시 `zig build -Doptimize=Debug`로 빌드 + 동일하게 리브랜딩. 수정 위치는 `scripts/build-wavetty.sh:40-48`(args 파싱), `scripts/build-wavetty.sh:111-112`(zig build 명령). 이유: 순수 `xcodebuild -configuration Debug` 디버그 빌드는 upstream "Ghostty"로 떠서(리브랜딩이 build-wavetty.sh 후처리에만 있음) 혼동 + AppleScript 접근성 막힘.
-- **이 세션 자동화 한계**: 터미널에서 osascript/cliclick 접근성 권한이 막혀(-1719) 메뉴 자동 클릭 검증이 불가했음. UI 검증은 사용자 직접 클릭 필요.
-- **도구 호출이 자주 malformed로 깨짐** (Opus 4.8/Sonnet 4.6 모두). 재시도하면 통과됨.
+## 미해결 / 주의
+- **`collapseTabGrowth` 부작용**: 로드 시 "탭 시그니처가 다른 항목의 prefix"인
+  엔트리를 제거하므로, `~/a` 1탭 창과 `~/a + ~/b` 2탭 창을 함께 쓰면 1탭 항목이
+  재시작 때 사라진다. 의도된 정리이지만 사용자가 불편해하면 재검토 대상.
+- **탭 닫고 0.6초 내 앱 종료**하면 `scheduleShrinkReeval`이 못 돌아 닫은 탭이
+  기록에 남는다(경미).
+- **UI 자동화 제약**: 터미널에서 osascript/cliclick 접근성 권한이 막히면(-1719)
+  메뉴 자동 클릭 검증 불가 → 사용자 직접 클릭 필요.
 
 ## 참고
-- 브랜딩 메커니즘: Xcode 프로젝트 소스는 전부 upstream 값(`project.pbxproj`: `INFOPLIST_KEY_CFBundleDisplayName = Ghostty`). Wavetty 리브랜딩은 100% `build-wavetty.sh` Step 2 후처리(plutil). → **디버그 빌드는 브랜딩 안 됨이 정상.**
-- 스크롤백 캡처/복원: `SessionHistoryStore.swift` — `captureNode`(캡처), `processPendingRestores`/`injectRestore`(복원), `restore(_:)` (창 재생성)
-- 커스텀 메뉴뷰: `RecentWindowMenuItem.swift` — `mouseEntered/Exited`로 x버튼 페이드, `mouseUp`=복원, `removeTapped`=삭제
-- Zig 코어 신규 API: `src/apprt/embedded.zig` — `ghostty_surface_dump_scrollback_styled`(VT/SGR 컬러), `ghostty_surface_write_styled_to_screen`(ANSI 해석 주입). 헤더: `include/ghostty.h`
-- Golden Rule: Wavetty 코드는 `macos/Sources/Features/` 하위에 격리, upstream `src/` 수정 최소화(`// Wavetty:` 주석)
-- 빌드 제약: build.zig 패닉 방지 위해 HEAD가 버전 태그 커밋보다 앞서야 함
+- 브랜딩은 100% `scripts/build-wavetty.sh` Step 2 후처리(plutil/sed). Xcode 소스는
+  전부 upstream 값이라 **디버그/일반 xcodebuild 빌드는 "Ghostty"로 뜨는 게 정상**.
+  리브랜딩된 디버그 빌드가 필요하면 `./scripts/build-wavetty.sh --debug`.
+- 세션 복구 상세 설명은 `WAVETTY.md` §4.4에 정리됨(캡처 시점, surface-UUID
+  스크롤백 키잉, 탭/창 닫기 구분, 복원 순서).
+- Zig 코어 신규 API: `ghostty_surface_dump_scrollback_styled`,
+  `ghostty_surface_write_styled_to_screen` (`src/apprt/embedded.zig`,
+  `include/ghostty.h`) + `src/termio/Exec.zig` write 버퍼 64→4096.
+  리베이스 시 유실되면 색상 스크롤백 복원이 깨진다.
+- Golden Rule: Wavetty 코드는 `macos/Sources/Features/` 하위에 격리,
+  upstream 파일 수정은 `// Wavetty:` 주석 + 최소 diff.
+- 빌드 제약: build.zig 패닉 방지 위해 HEAD가 버전 태그 커밋보다 앞서야 함.
