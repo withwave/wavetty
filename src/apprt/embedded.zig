@@ -1882,8 +1882,8 @@ pub const CAPI = struct {
         const alloc = surface.app.core_app.alloc;
         const core = &surface.core_surface;
 
-        core.renderer_state.mutex.lock();
-        defer core.renderer_state.mutex.unlock();
+        core.renderer_state.mutex.lockUncancelable(global.io());
+        defer core.renderer_state.mutex.unlock(global.io());
 
         // Only dump primary screen scrollback (not alternate)
         if (core.io.terminal.screens.active_key == .alternate) return .empty;
@@ -1919,8 +1919,8 @@ pub const CAPI = struct {
         const alloc = surface.app.core_app.alloc;
         const core = &surface.core_surface;
 
-        core.renderer_state.mutex.lock();
-        defer core.renderer_state.mutex.unlock();
+        core.renderer_state.mutex.lockUncancelable(global.io());
+        defer core.renderer_state.mutex.unlock(global.io());
 
         if (core.io.terminal.screens.active_key == .alternate) return .empty;
 
@@ -1958,8 +1958,8 @@ pub const CAPI = struct {
         len: usize,
     ) void {
         const core = &surface.core_surface;
-        core.renderer_state.mutex.lock();
-        defer core.renderer_state.mutex.unlock();
+        core.renderer_state.mutex.lockUncancelable(global.io());
+        defer core.renderer_state.mutex.unlock(global.io());
 
         const slice = text[0..len];
         // Use the terminal's printString to write text directly to the
@@ -1981,8 +1981,8 @@ pub const CAPI = struct {
         len: usize,
     ) void {
         const core = &surface.core_surface;
-        core.renderer_state.mutex.lock();
-        defer core.renderer_state.mutex.unlock();
+        core.renderer_state.mutex.lockUncancelable(global.io());
+        defer core.renderer_state.mutex.unlock(global.io());
         core.io.terminal_stream.nextSlice(text[0..len]);
     }
 

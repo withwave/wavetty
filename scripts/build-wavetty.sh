@@ -32,8 +32,9 @@ ENTITLEMENTS="macos/GhosttyReleaseLocal.entitlements"
 GITHUB_REPO="withwave/wavetty"
 RELEASE_TAG="v1.4.11-withwave"
 
-# Use brew zig@0.15 (patched for Xcode 26.4)
-export PATH="/opt/homebrew/opt/zig@0.15/bin:$PATH"
+# Upstream requires Zig 0.16 (build.zig.zon minimum_zig_version). Pin brew's
+# zig@0.16 so a different default `zig` on PATH can't break the build.
+export PATH="/opt/homebrew/opt/zig@0.16/bin:$PATH"
 
 # ---------------------------------------------------------------------------
 # Args

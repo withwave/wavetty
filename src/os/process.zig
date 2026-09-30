@@ -16,18 +16,39 @@ pub fn getCwd(alloc: std.mem.Allocator, pid: posix.pid_t) ?[]u8 {
 }
 
 /// macOS implementation using proc_pidinfo with PROC_PIDVNODEPATHINFO.
+///
+/// libproc.h is declared by hand rather than @cImport'ed: translating it pulls
+/// in mach message headers whose bitfield structs Zig's translate-c can't
+/// represent (they become opaque and fail the SDK's size assertions).
 fn getCwdMacos(alloc: std.mem.Allocator, pid: posix.pid_t) ?[]u8 {
-    const c = @cImport({
-        @cInclude("libproc.h");
-    });
+    const PROC_PIDVNODEPATHINFO = 9;
+    const MAXPATHLEN = 1024;
 
-    var vpi: c.proc_vnodepathinfo = undefined;
-    const size = c.proc_pidinfo(
+    // struct vnode_info_path { struct vnode_info vip_vi; char vip_path[MAXPATHLEN]; }
+    // where struct vnode_info is 152 bytes (vinfo_stat + type + pad + fsid).
+    const VnodeInfoPath = extern struct {
+        vip_vi: [152]u8,
+        vip_path: [MAXPATHLEN]u8,
+    };
+    // struct proc_vnodepathinfo { vnode_info_path pvi_cdir, pvi_rdir; }
+    const ProcVnodePathInfo = extern struct {
+        pvi_cdir: VnodeInfoPath,
+        pvi_rdir: VnodeInfoPath,
+    };
+    comptime std.debug.assert(@sizeOf(ProcVnodePathInfo) == 2352);
+
+    const proc_pidinfo = @extern(
+        *const fn (c_int, c_int, u64, ?*anyopaque, c_int) callconv(.c) c_int,
+        .{ .name = "proc_pidinfo" },
+    );
+
+    var vpi: ProcVnodePathInfo = undefined;
+    const size = proc_pidinfo(
         pid,
-        c.PROC_PIDVNODEPATHINFO,
+        PROC_PIDVNODEPATHINFO,
         0,
         &vpi,
-        @sizeOf(c.proc_vnodepathinfo),
+        @sizeOf(ProcVnodePathInfo),
     );
 
     if (size <= 0) {

@@ -160,8 +160,8 @@ pub fn threadEnter(
     // integration (OSC 7) is not available. We use tcgetpgrp() on this
     // fd to find the foreground process and read its CWD.
     {
-        io.renderer_state.mutex.lock();
-        defer io.renderer_state.mutex.unlock();
+        io.renderer_state.mutex.lockUncancelable(global.io());
+        defer io.renderer_state.mutex.unlock(global.io());
         io.terminal.setPtyFd(pty_fds.read);
     }
 

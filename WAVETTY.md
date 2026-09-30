@@ -312,8 +312,8 @@ Recent Windows section (§4.4) does. `SurfaceView.pwdDisplayPath()` /
 - Apple Developer Program subscription ($99/year), Team ID `8AC9KUZJ5P`
 - Developer ID Application certificate in login keychain
 - `xcrun notarytool` profile registered as `modin-notary`
-- `brew install zig@0.15` (Zig 0.15.2 patched bottle — stock Zig 0.15 fails
-  to link against Xcode 26.4 SDK)
+- `brew install zig@0.16` (upstream's `minimum_zig_version`; the build script
+  pins it on PATH. Zig 0.15.2 can't compile lib-vt's libcxx on the macOS 27 SDK)
 - `xcodebuild -downloadComponent MetalToolchain` after Xcode updates
 - `gh auth login` for GitHub CLI
 

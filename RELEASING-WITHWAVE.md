@@ -110,13 +110,16 @@ xcrun notarytool store-credentials "modin-notary" \
   --password "APP_SPECIFIC_PASSWORD"
 ```
 
-### 5. Patched Zig 설치 (Xcode 26.4 호환)
+### 5. Zig 0.16 설치
 
 ```bash
-brew install zig@0.15
+brew install zig@0.16
 ```
 
-표준 Zig 0.15.2는 Xcode 26.4와 링크 에러가 발생하므로 brew bottle (패치 버전) 사용 필수.
+upstream이 Zig 0.16을 요구한다(`build.zig.zon`의 `minimum_zig_version`).
+`build-wavetty.sh`는 `/opt/homebrew/opt/zig@0.16/bin`을 PATH 앞에 고정한다.
+Zig 0.15.2는 macOS 27 SDK(Xcode 27)에서 lib-vt용 libcxx가 컴파일되지 않는다
+(`use of undeclared identifier 'INFINITY'`).
 
 ### 6. Metal Toolchain (Xcode 업데이트 후 필요시)
 
@@ -147,8 +150,8 @@ xcodebuild -downloadComponent MetalToolchain
 ### `MAC verification failed during PKCS12 import`
 → openssl이 신형 포맷으로 묶어서 macOS keychain이 못 읽음. `-legacy` 옵션 추가.
 
-### `undefined symbol: __availability_version_check` 등 링크 에러
-→ Xcode 26.4 + 표준 Zig 0.15.2 비호환. `brew install zig@0.15` 사용.
+### `undefined symbol: __availability_version_check` 등 링크 에러 / libcxx `INFINITY` 오류
+→ Zig 버전과 Xcode SDK 불일치. `brew install zig@0.16` 후 스크립트로 빌드(0.16 고정).
 
 ### `cannot execute tool 'metal' due to missing Metal Toolchain`
 → Xcode 업데이트 직후. `xcodebuild -downloadComponent MetalToolchain` 재설치.
