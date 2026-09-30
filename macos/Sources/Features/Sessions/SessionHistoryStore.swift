@@ -27,6 +27,19 @@ struct SessionLeaf: Codable, Equatable {
     /// Path to a file holding this surface's color-preserving (VT/SGR)
     /// scrollback, captured so a reopened session shows its prior output.
     var scrollbackFile: String?
+    /// The live surface this leaf was captured from. This — not the directory
+    /// — is what ties an entry to a window: two windows in the same folder are
+    /// different sessions with different histories.
+    var surfaceID: String?
+
+    /// `surfaceID`, falling back to the scrollback file name for entries saved
+    /// before the field existed (those files were already named by surface id).
+    var resolvedSurfaceID: String? {
+        if let surfaceID { return surfaceID }
+        guard let file = scrollbackFile else { return nil }
+        let name = ((file as NSString).lastPathComponent as NSString).deletingPathExtension
+        return UUID(uuidString: name) != nil ? name : nil
+    }
 }
 
 enum SplitDir: String, Codable { case horizontal, vertical }
@@ -45,14 +58,11 @@ indirect enum SessionNode: Codable, Equatable {
         }
     }
 
-    /// Frame-independent structural signature (dirs / ssh / split layout) used
-    /// to dedup windows with identical content.
-    var signature: String {
+    /// Every leaf in the tree, left to right.
+    var leaves: [SessionLeaf] {
         switch self {
-        case .leaf(let l):
-            return l.sshAlias.map { "ssh:\($0)" } ?? (l.workingDirectory ?? "∅")
-        case .split(let dir, _, let left, let right):
-            return "(\(dir.rawValue) \(left.signature) \(right.signature))"
+        case .leaf(let l): return [l]
+        case .split(_, _, let left, let right): return left.leaves + right.leaves
         }
     }
 }
@@ -91,10 +101,24 @@ struct RecentWindow: Codable, Equatable {
     /// Whether the first leaf is an SSH session (for the menu icon).
     var isSSH: Bool { tabs.first?.root.firstLeaf?.sshAlias != nil }
 
-    /// Frame-independent content signature: same tabs/dirs/splits/hosts collapse
-    /// to one entry regardless of window position or which launch produced it.
-    var signature: String {
-        tabs.map { $0.root.signature }.joined(separator: " ⇥ ")
+    /// Ids of the surfaces this entry was captured from — its identity.
+    var surfaceIDs: Set<String> {
+        Set(tabs.flatMap { $0.root.leaves.compactMap(\.resolvedSurfaceID) })
+    }
+
+    /// Menu labels for `windows`, in order. Entries are identified by session,
+    /// not folder, so two can share a display name; those get their last-used
+    /// time appended so the menu can tell them apart.
+    static func menuTitles(for windows: [RecentWindow]) -> [String] {
+        var counts: [String: Int] = [:]
+        for w in windows { counts[w.displayName, default: 0] += 1 }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "M/d HH:mm"
+        return windows.map { w in
+            (counts[w.displayName] ?? 0) > 1
+                ? "\(w.displayName)  · \(fmt.string(from: w.lastUsed))"
+                : w.displayName
+        }
     }
 }
 
@@ -132,6 +156,11 @@ final class SessionHistoryStore: ObservableObject {
     /// path and from restore so capture doesn't depend on ssh still running.
     func noteSSHSession(surfaceID: UUID, alias: String) {
         taggedSSHAliases[surfaceID] = alias
+    }
+
+    /// The SSH alias a surface was tagged with at connect/restore, if any.
+    func taggedSSHAlias(for surfaceID: UUID) -> String? {
+        taggedSSHAliases[surfaceID]
     }
 
     /// Maps each live tab window to the recent entry it currently belongs to, so
@@ -276,12 +305,31 @@ final class SessionHistoryStore: ObservableObject {
         }
         guard !tabs.isEmpty else { return false }
 
-        let entry = RecentWindow(
+        var entry = RecentWindow(
             id: UUID(), lastUsed: Date(), frame: WindowFrame(frameWindow.frame), tabs: tabs)
-        let newSignature = entry.signature
+        let liveSurfaceIDs = entry.surfaceIDs
 
+        // Which entry is this window? Identity is the session, never the folder:
+        //  1. the entry a member tab window is already mapped to (the same live
+        //     window across captures, or a window `restore` just rebuilt);
+        //  2. else an entry captured from these same surfaces (a window macOS
+        //     state restoration reopened at launch keeps its surface ids);
+        //  3. else it's a new session and gets its own entry — even if another
+        //     entry lists the same folders. (Matching by folder merged distinct
+        //     windows into one entry and restored one window's history into
+        //     another.)
         let memberKeys = tabWindows.map { ObjectIdentifier($0) }
         let mappedIDs = Set(memberKeys.compactMap { windowEntryIDs[$0] })
+            .filter { id in recentWindows.contains { $0.id == id } }
+        let targetID: UUID? =
+            windowEntryIDs[ObjectIdentifier(frameWindow)].flatMap { id in mappedIDs.contains(id) ? id : nil }
+            ?? mappedIDs.first
+            ?? recentWindows.first { !$0.surfaceIDs.isDisjoint(with: liveSurfaceIDs) }?.id
+
+        // Map before the shrink check below: its deferred re-check finds the
+        // survivor through this mapping, including a window matched by surface
+        // ids alone (otherwise that window would be deferred forever).
+        if let targetID { for key in memberKeys { windowEntryIDs[key] = targetID } }
 
         // This window maps to an entry with MORE tabs than we see now, so it is
         // shrinking. We can't yet tell a single-tab close (window survives →
@@ -289,36 +337,33 @@ final class SessionHistoryStore: ObservableObject {
         // (tabs close one-by-one, each a smaller capture ending at 1 → we must
         // keep the full entry for restore). Defer: don't overwrite now; a
         // re-check decides once the close settles (see scheduleShrinkReeval).
-        if !allowShrink {
-            let largerMapped = mappedIDs.filter { id in
-                (recentWindows.first { $0.id == id }?.tabs.count ?? 0) > tabs.count
-            }
-            if !largerMapped.isEmpty {
-                largerMapped.forEach { scheduleShrinkReeval(mappedID: $0) }
-                return false
-            }
+        if !allowShrink, let targetID,
+           (recentWindows.first { $0.id == targetID }?.tabs.count ?? 0) > tabs.count {
+            scheduleShrinkReeval(mappedID: targetID)
+            return false
         }
 
-        // This same live window may already have an entry from when it had a
-        // different tab count. Drop those now-stale entries so the window keeps
-        // a single, latest entry instead of accumulating one per tab count.
-        let staleIDs = mappedIDs.filter { id in
-            guard let existing = recentWindows.first(where: { $0.id == id }) else { return false }
-            return existing.signature != newSignature
-        }
-        var removedStale = false
-        if !staleIDs.isEmpty {
-            recentWindows.removeAll { staleIDs.contains($0.id) }
-            removedStale = true
+        if let targetID { entry.id = targetID }
+        for key in memberKeys { windowEntryIDs[key] = entry.id }
+
+        // Tabs dragged in from another window still map to that window's entry.
+        // Once no live window maps to it and everything it held is now here,
+        // it is fully absorbed — drop it rather than leave a phantom duplicate.
+        var removedAbsorbed = false
+        for id in mappedIDs where id != entry.id {
+            let stillLive = windowEntryIDs.contains { key, value in
+                value == id && NSApp.windows.contains { ObjectIdentifier($0) == key && $0.isVisible }
+            }
+            guard !stillLive,
+                  let other = recentWindows.first(where: { $0.id == id }),
+                  other.surfaceIDs.isSubset(of: liveSurfaceIDs) else { continue }
+            recentWindows.removeAll { $0.id == id }
+            removedAbsorbed = true
         }
 
         let changed = upsert(entry, save: false)
-        // Remember which entry this window now maps to (the deduped/inserted one).
-        if let entryID = recentWindows.first(where: { $0.signature == newSignature })?.id {
-            for key in memberKeys { windowEntryIDs[key] = entryID }
-        }
-        if (changed || removedStale) && save { Self.save(recentWindows) }
-        return changed || removedStale
+        if (changed || removedAbsorbed) && save { Self.save(recentWindows) }
+        return changed || removedAbsorbed
     }
 
     /// After a window shrinks, wait for the close to settle and decide: if a
@@ -349,6 +394,7 @@ final class SessionHistoryStore: ObservableObject {
         switch node {
         case .leaf(let view):
             var leaf = SessionLeaf()
+            leaf.surfaceID = view.id.uuidString
             // Prefer the alias tagged at session creation (survives ssh exit),
             // then fall back to live foreground-process inspection.
             if let alias = taggedSSHAliases[view.id] ?? sshAlias(of: view) {
@@ -440,25 +486,20 @@ final class SessionHistoryStore: ObservableObject {
         return len > 0 ? String(cString: buf) : nil
     }
 
-    /// Upserts a window entry deduped by content signature (so the same window
-    /// across sweeps, restores, and app launches is one entry — not many). A
-    /// bare timestamp bump on identical content is ignored to avoid disk churn;
-    /// a moved window (changed frame) or changed layout moves it to the front
-    /// and persists.
+    /// Inserts `entry`, or replaces the entry with the same id (the same
+    /// session). A bare timestamp bump on identical content is ignored to avoid
+    /// disk churn; a moved window or changed layout/output moves it to the
+    /// front and persists.
     @discardableResult
     private func upsert(_ entry: RecentWindow, save: Bool) -> Bool {
-        let sig = entry.signature
-        if let idx = recentWindows.firstIndex(where: { $0.signature == sig }) {
+        if let idx = recentWindows.firstIndex(where: { $0.id == entry.id }) {
             let existing = recentWindows[idx]
             if existing.frame == entry.frame && existing.tabs == entry.tabs {
                 recentWindows[idx].lastUsed = entry.lastUsed
                 return false
             }
-            // Same window, changed position/layout: keep its id, move to front.
-            var updated = entry
-            updated.id = existing.id
             recentWindows.remove(at: idx)
-            recentWindows.insert(updated, at: 0)
+            recentWindows.insert(entry, at: 0)
             if save { Self.save(recentWindows) }
             return true
         }
@@ -474,8 +515,7 @@ final class SessionHistoryStore: ObservableObject {
         // If a live window currently matches this entry, suppress that specific
         // window so the next sweep doesn't re-capture it back into the list. A
         // later reconnect opens a different window object and is captured.
-        if let entry = recentWindows.first(where: { $0.id == id }),
-           let live = liveWindow(matching: entry) {
+        if let live = liveWindow(for: id) {
             let repObject: AnyObject = live.tabGroup ?? live
             suppressedWindows.insert(ObjectIdentifier(repObject))
         }
@@ -534,13 +574,10 @@ final class SessionHistoryStore: ObservableObject {
         // rapidly clicking the same item before the first restore finishes.
         guard !restoringIDs.contains(window.id) else { return }
 
-        // If a window with the same content (single- or multi-tab) is already
-        // open, focus it instead of opening a duplicate. Skip ambiguous (∅)
-        // signatures — windows whose directory couldn't be resolved — so we
-        // never focus the wrong window; those always restore fresh. (The
-        // mid-restore capture that previously corrupted multi-tab restores is
-        // now blocked by the restoringIDs guard in sweepAllWindows.)
-        if !window.signature.contains("∅"), let live = liveWindow(matching: window) {
+        // If this very session is still open, focus it instead of opening a
+        // duplicate. Matched by session identity, not folders: another window
+        // in the same folders is a different session and must not be focused.
+        if let live = liveWindow(for: window.id) {
             if let group = live.tabGroup, group.selectedWindow !== live {
                 group.selectedWindow = live
             }
@@ -573,10 +610,14 @@ final class SessionHistoryStore: ObservableObject {
             // we must remove it before our explicit add or AppKit's
             // tabbedWindows state gets corrupted and the tabs end up as separate
             // (1-tab) windows — which then capture as a single-tab entry.
+            // The rebuilt window IS this entry: map it now, so its captures
+            // update this entry rather than being matched some other way.
+            self.windowEntryIDs[ObjectIdentifier(primaryWindow)] = window.id
             for tab in window.tabs.dropFirst() {
                 let tree = SplitTree(root: self.buildNode(tab.root, app: app), zoomed: nil)
                 let controller = TerminalController(appDelegate.ghostty, withSurfaceTree: tree)
                 guard let tabWindow = controller.window else { continue }
+                self.windowEntryIDs[ObjectIdentifier(tabWindow)] = window.id
                 if let group = primaryWindow.tabGroup,
                    group.windows.firstIndex(of: tabWindow) != nil {
                     group.removeWindow(tabWindow)
@@ -611,7 +652,10 @@ final class SessionHistoryStore: ObservableObject {
     ) {
         let liveTabs = (primaryWindow.tabGroup?.windows ?? [primaryWindow])
             .filter { $0.windowController is TerminalController }.count
-        if liveTabs >= expectedTabs || attempts >= 40 {
+        // Also wait for the saved scrollback to be injected. Capturing first
+        // would record the new surfaces' still-empty screens and delete the old
+        // scrollback files as orphans — losing the history being restored.
+        if (liveTabs >= expectedTabs && pendingInjections.isEmpty) || attempts >= 60 {
             restoringIDs.remove(id)
             captureNow()
             return
@@ -624,62 +668,14 @@ final class SessionHistoryStore: ObservableObject {
         }
     }
 
-    /// Finds an already-open terminal window/tab-group whose live content
-    /// signature matches `target`, so restore can focus it instead of opening
-    /// a duplicate. Mirrors the grouping logic in `sweepAllWindows` but computes
-    /// the signature directly from live views (no scrollback side effects).
-    private func liveWindow(matching target: RecentWindow) -> NSWindow? {
-        var groups: [ObjectIdentifier: NSWindow] = [:]
-        var order: [ObjectIdentifier] = []
-        for window in NSApp.windows {
-            guard window.windowController is TerminalController else { continue }
-            let repObject: AnyObject = window.tabGroup ?? window
-            let key = ObjectIdentifier(repObject)
-            if groups[key] == nil {
-                groups[key] = window
-                order.append(key)
-            }
-        }
-
-        for key in order {
-            let anyWindow = groups[key]!
-            let tabWindows: [NSWindow]
-            if let group = anyWindow.tabGroup {
-                tabWindows = group.windows.filter { $0.windowController is TerminalController }
-            } else {
-                tabWindows = [anyWindow]
-            }
-
-            var tabSigs: [String] = []
-            for window in tabWindows {
-                guard let controller = window.windowController as? TerminalController,
-                      let root = controller.surfaceTree.root else { continue }
-                tabSigs.append(liveNodeSignature(root))
-            }
-            guard !tabSigs.isEmpty else { continue }
-
-            let liveSignature = tabSigs.joined(separator: " ⇥ ")
-            if liveSignature == target.signature { return tabWindows.first }
-        }
-        return nil
-    }
-
-    /// Live structural signature of one leaf — mirrors `SessionNode.signature`
-    /// but reads directly from the surface, with no capture side effects.
-    private func liveLeafSignature(_ view: Ghostty.SurfaceView) -> String {
-        if let alias = sshAlias(of: view) { return "ssh:\(alias)" }
-        if let dir = effectivePwd(of: view), isLocalDirectory(dir) { return dir }
-        return "∅"
-    }
-
-    /// Live structural signature of a split-tree node — mirrors `SessionNode.signature`.
-    private func liveNodeSignature(_ node: SplitTree<Ghostty.SurfaceView>.Node) -> String {
-        switch node {
-        case .leaf(let view):
-            return liveLeafSignature(view)
-        case .split(let split):
-            let dir: SplitDir = split.direction == .horizontal ? .horizontal : .vertical
-            return "(\(dir.rawValue) \(liveNodeSignature(split.left)) \(liveNodeSignature(split.right)))"
+    /// The open, visible terminal window currently mapped to entry `id`, if
+    /// any — how restore finds "this session is already open" and remove finds
+    /// the window to suppress.
+    private func liveWindow(for id: UUID) -> NSWindow? {
+        NSApp.windows.first { w in
+            w.isVisible &&
+            w.windowController is TerminalController &&
+            windowEntryIDs[ObjectIdentifier(w)] == id
         }
     }
 
@@ -688,9 +684,13 @@ final class SessionHistoryStore: ObservableObject {
     private struct PendingRestore { var file: String?; var ssh: String? }
     private var pendingRestores: [UUID: PendingRestore] = [:]
 
+    /// Restored surfaces whose scrollback hasn't been injected yet.
+    private var pendingInjections: Set<UUID> = []
+
     private func processPendingRestores() {
         let pending = pendingRestores
         pendingRestores.removeAll()
+        pendingInjections.formUnion(pending.keys)
         for (uuid, info) in pending {
             injectRestore(uuid: uuid, info: info, attempts: 0)
         }
@@ -700,7 +700,7 @@ final class SessionHistoryStore: ObservableObject {
         guard let view = findSurfaceView(uuid), let surface = view.surface else {
             // Surface not attached yet; retry briefly (mirrors ghostty's own
             // restore polling).
-            guard attempts < 40 else { return }
+            guard attempts < 40 else { pendingInjections.remove(uuid); return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
                 self?.injectRestore(uuid: uuid, info: info, attempts: attempts + 1)
             }
@@ -720,6 +720,7 @@ final class SessionHistoryStore: ObservableObject {
             // env we set makes it auto-login).
             Self.sendText(surface, "ssh \(ssh)\r")
         }
+        pendingInjections.remove(uuid)
     }
 
     private func findSurfaceView(_ uuid: UUID) -> Ghostty.SurfaceView? {
@@ -796,30 +797,14 @@ final class SessionHistoryStore: ObservableObject {
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         let decoded = (try? dec.decode([RecentWindow].self, from: data)) ?? []
-        // Collapse any historical duplicates (older files predate signature
-        // dedup). Stored most-recent-first, so keep the first of each signature.
-        var seen = Set<String>()
-        let deduped = decoded.filter { seen.insert($0.signature).inserted }
-        // Then collapse tab-growth clutter: the same window captured at 1, 2, 3…
-        // tabs (before a tab change updated a single entry) shows up as the same
-        // folder repeated. Applied only here (at load, no windows open yet) so
-        // we never drop an entry for a currently-open window.
-        return collapseTabGrowth(deduped)
-    }
-
-    /// Removes entries that are an earlier growth-stage of another: if one
-    /// entry's tab signatures are a prefix of another's (same dirs/hosts in
-    /// order, fewer tabs), keep only the longer (most complete) one. Cleans up
-    /// the "same folder listed once per tab count" clutter.
-    private static func collapseTabGrowth(_ windows: [RecentWindow]) -> [RecentWindow] {
-        let sigLists = windows.map { w in w.tabs.map { $0.root.signature } }
-        return windows.enumerated().filter { (i, _) in
-            let mine = sigLists[i]
-            // Keep unless some other entry is a strictly longer prefix-extension.
-            return !sigLists.enumerated().contains { (j, other) in
-                j != i && other.count > mine.count && Array(other.prefix(mine.count)) == mine
-            }
-        }.map { $0.element }
+        // Only exact duplicates (the same surfaces) collapse. Entries that merely
+        // share folders are different sessions and are all kept. Stored
+        // most-recent-first, so the first of each is the newest.
+        var seen = Set<Set<String>>()
+        return decoded.filter { w in
+            let ids = w.surfaceIDs
+            return ids.isEmpty || seen.insert(ids).inserted
+        }
     }
 
     private static func save(_ windows: [RecentWindow]) {

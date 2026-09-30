@@ -1164,11 +1164,12 @@ extension AppDelegate {
             let header = NSMenuItem(title: "Recent Windows  (클릭=복원, ⌥옵션+클릭=삭제)", action: nil, keyEquivalent: "")
             header.isEnabled = false
             dockMenu.addItem(header)
-            for window in windows {
+            let titles = RecentWindow.menuTitles(for: windows)
+            for (window, title) in zip(windows, titles) {
                 // Click the row to restore. Holding ⌥ swaps the row to a delete
                 // action (Finder-style alternate item) — see the header hint.
                 let item = NSMenuItem(
-                    title: window.displayName,
+                    title: title,
                     action: #selector(restoreRecentWindow(_:)),
                     keyEquivalent: "")
                 item.target = self
@@ -1181,7 +1182,7 @@ extension AppDelegate {
                 // Same (empty) key equivalent + isAlternate so AppKit swaps them
                 // based on the ⌥ modifier.
                 let removeItem = NSMenuItem(
-                    title: "Remove “\(window.displayName)” from List",
+                    title: "Remove “\(title)” from List",
                     action: #selector(removeRecentWindow(_:)),
                     keyEquivalent: "")
                 removeItem.target = self

@@ -185,18 +185,21 @@ extension Ghostty {
             surfaceModel?.unsafeCValue
         }
 
-        /// Wavetty: the folder name of the surface's working directory (OSC 7
-        /// pwd, else the foreground process CWD queried from the OS), or nil.
+        /// Wavetty: the surface's working directory — the OSC 7 pwd, else the
+        /// foreground process CWD queried from the OS.
+        func effectivePwd() -> String? {
+            if let pwd, !pwd.isEmpty { return pwd }
+            guard let surface = self.surface else { return nil }
+            var buf = [CChar](repeating: 0, count: 4096)
+            guard ghostty_surface_pwd(surface, &buf, 4096) > 0 else { return nil }
+            let dir = String(cString: buf)
+            return dir.isEmpty ? nil : dir
+        }
+
+        /// Wavetty: the folder name of the surface's working directory, or nil.
         /// Used as a fallback window/tab title when the shell sets no title.
         func pwdFolderName() -> String? {
-            var dir = pwd
-            if (dir ?? "").isEmpty, let surface = self.surface {
-                var buf = [CChar](repeating: 0, count: 4096)
-                if ghostty_surface_pwd(surface, &buf, 4096) > 0 {
-                    dir = String(cString: buf)
-                }
-            }
-            guard let dir, !dir.isEmpty else { return nil }
+            guard let dir = effectivePwd() else { return nil }
             let name = (dir as NSString).lastPathComponent
             return name.isEmpty ? nil : name
         }
@@ -1961,20 +1964,36 @@ extension Ghostty {
         }
 
         /// Directory where scrollback files are persisted across launches.
+        /// Wavetty: under our own bundle id — this was hardcoded to
+        /// `com.mitchellh.ghostty`, sharing the folder with an installed Ghostty.
         private static var scrollbackDirectory: URL? {
+            scrollbackDirectory(bundleID: Bundle.main.bundleIdentifier ?? "com.modincompany.wavetty")
+        }
+
+        private static func scrollbackDirectory(bundleID: String) -> URL? {
             guard let support = FileManager.default.urls(
                 for: .applicationSupportDirectory,
                 in: .userDomainMask
             ).first else { return nil }
             let dir = support
-                .appendingPathComponent("com.mitchellh.ghostty")
+                .appendingPathComponent(bundleID)
                 .appendingPathComponent("scrollback")
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             return dir
         }
 
+        /// Wavetty: color-preserving (VT/SGR) state-restoration scrollback. The
+        /// `.vt` extension keeps it apart from the Recent Windows `.ansi` files,
+        /// which SessionHistoryStore prunes when no entry references them.
         private static func scrollbackFile(for uuid: UUID) -> URL? {
-            scrollbackDirectory?.appendingPathComponent("\(uuid.uuidString).txt")
+            scrollbackDirectory?.appendingPathComponent("\(uuid.uuidString).vt")
+        }
+
+        /// Plain-text files written by earlier builds, still restored once.
+        private static func legacyScrollbackFiles(for uuid: UUID) -> [URL] {
+            ["com.modincompany.wavetty", "com.mitchellh.ghostty"].compactMap {
+                scrollbackDirectory(bundleID: $0)?.appendingPathComponent("\(uuid.uuidString).txt")
+            }
         }
 
         required convenience init(from decoder: Decoder) throws {
@@ -2029,32 +2048,33 @@ extension Ghostty {
             try container.encode(titleFromTerminal != nil, forKey: .isUserSetTitle)
 
             // Save scrollback to a separate file (NSCoder is not suited
-            // for large binary payloads). Plain text only, no SGR attrs.
+            // for large binary payloads).
             saveScrollbackToDisk()
         }
 
         /// Dump the current scrollback to disk for later restoration.
+        /// Wavetty: styled (VT/SGR) so colors survive, as in session recovery.
         private func saveScrollbackToDisk() {
             guard let surface = self.surface,
                   let url = Self.scrollbackFile(for: self.id) else { return }
 
-            var s = ghostty_surface_dump_scrollback(surface)
-            defer { ghostty_string_free(s) }
-            guard let ptr = s.ptr, s.len > 0 else {
+            let text = Ghostty.AllocatedString(ghostty_surface_dump_scrollback_styled(surface)).string
+            guard !text.isEmpty else {
                 // Nothing to save; remove any stale file
                 try? FileManager.default.removeItem(at: url)
                 return
             }
-
-            let data = Data(bytes: ptr, count: Int(s.len))
-            try? data.write(to: url, options: .atomic)
+            try? text.write(to: url, atomically: true, encoding: .utf8)
         }
 
         /// Inject saved scrollback (if any) into the terminal once the
         /// underlying surface is ready. Polls briefly for surface attachment.
         private func restoreScrollback(uuid: UUID, attempts: Int = 0) {
-            guard let url = Self.scrollbackFile(for: uuid),
-                  FileManager.default.fileExists(atPath: url.path) else { return }
+            let styled = Self.scrollbackFile(for: uuid)
+                .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+            let legacy = Self.legacyScrollbackFiles(for: uuid)
+                .first { FileManager.default.fileExists(atPath: $0.path) }
+            guard let url = styled ?? legacy else { return }
 
             // If surface isn't ready yet, retry a few times.
             guard let surface = self.surface else {
@@ -2071,14 +2091,16 @@ extension Ghostty {
                 return
             }
 
-            guard let data = try? Data(contentsOf: url), !data.isEmpty else {
-                try? FileManager.default.removeItem(at: url)
-                return
-            }
-
-            data.withUnsafeBytes { (buf: UnsafeRawBufferPointer) in
-                guard let p = buf.baseAddress?.assumingMemoryBound(to: CChar.self) else { return }
-                ghostty_surface_write_text_to_screen(surface, p, UInt(data.count))
+            if let text = try? String(contentsOf: url, encoding: .utf8), !text.isEmpty {
+                let write = styled != nil
+                    ? ghostty_surface_write_styled_to_screen
+                    : ghostty_surface_write_text_to_screen
+                text.withCString { write(surface, $0, UInt(strlen($0))) }
+                // Same separator session recovery uses, so restored output is
+                // never mistaken for the new shell's.
+                "\r\n\u{1b}[2m──── previous session ──── \u{1b}[0m\r\n".withCString {
+                    ghostty_surface_write_styled_to_screen(surface, $0, UInt(strlen($0)))
+                }
             }
 
             // Remove the file so a subsequent normal-quit launch doesn't replay it.

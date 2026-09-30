@@ -49,10 +49,11 @@ final class RecentWindowsMenuController: NSObject, NSMenuDelegate {
         menu.addItem(hint)
         menu.addItem(.separator())
 
-        for window in windows {
+        let titles = RecentWindow.menuTitles(for: windows)
+        for (window, title) in zip(windows, titles) {
             // Click the row to restore.
             let item = NSMenuItem(
-                title: window.displayName,
+                title: title,
                 action: #selector(restore(_:)),
                 keyEquivalent: "")
             item.target = self
@@ -65,7 +66,7 @@ final class RecentWindowsMenuController: NSObject, NSMenuDelegate {
 
             // Option-key alternate: holding ⌥ turns the row into delete.
             let removeItem = NSMenuItem(
-                title: "Remove “\(window.displayName)” from List",
+                title: "Remove “\(title)” from List",
                 action: #selector(remove(_:)),
                 keyEquivalent: "")
             removeItem.target = self
