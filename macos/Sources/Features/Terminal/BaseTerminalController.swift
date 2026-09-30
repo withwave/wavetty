@@ -109,6 +109,9 @@ class BaseTerminalController: NSWindowController,
     /// The last computed title from the focused surface (without the override).
     private var lastComputedTitle: String = "🌊"
 
+    /// Wavetty: the surface whose title/pwd drives the window title.
+    private(set) weak var wavettyTitleSurface: Ghostty.SurfaceView?
+
     /// The time that undo/redo operations that contain running ptys are valid for.
     var undoExpiration: Duration {
         ghostty.config.undoTimeout
@@ -887,6 +890,7 @@ class BaseTerminalController: NSWindowController,
         // closed surfaces.
         if let titleSurface = focusedSurface ?? lastFocusedSurface,
            surfaceTree.contains(titleSurface) {
+            wavettyTitleSurface = titleSurface   // Wavetty: pwd-based window title
             // If we have a surface, we want to listen for title changes.
             titleSurface.$title
                 .combineLatest(titleSurface.$bell)
@@ -895,6 +899,7 @@ class BaseTerminalController: NSWindowController,
                 .store(in: &focusedSurfaceCancellables)
         } else {
             // There is no surface to listen to titles for.
+            wavettyTitleSurface = nil   // Wavetty
             titleDidChange(to: "🌊")
         }
     }
@@ -923,10 +928,24 @@ class BaseTerminalController: NSWindowController,
             return
         }
 
+        // Wavetty: name the window after its folder, unique across open windows
+        // (see WavettyWindowTitles), so the Dock's window list can tell windows
+        // apart. Falls back to the shell title when there's no pwd.
+        if let name = WavettyWindowTitles.shared.title(for: self) {
+            window.title = computeTitle(title: name, bell: focusedSurface?.bell ?? false)
+            return
+        }
+
         window.title = lastComputedTitle
     }
 
+    /// Wavetty: re-apply the title; another window's folder can change ours.
+    func wavettyRefreshTitle() { applyTitleToWindow() }
+
     func pwdDidChange(to: URL?) {
+        // Wavetty: titles are folder names, unique across windows — re-title all.
+        WavettyWindowTitles.shared.setNeedsRefresh()
+
         guard let window else { return }
 
         if derivedConfig.macosTitlebarProxyIcon == .visible {
