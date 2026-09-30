@@ -1,69 +1,45 @@
-# 작업 인계 — 2026-08-28
+# 작업 인계 — 2026-09-30
 
 ## 현재 상태
-Wavetty(Ghostty 포크) **v1.4.11-withwave 릴리즈 완료**.
-`HEAD == origin/main == 태그 v1.4.11-withwave`, GitHub Release에 `Wavetty.dmg`
-업로드까지 끝난 상태. (로컬 태그가 v1.4.2까지만 있으면 `git fetch --tags`)
+- **main** (origin과 동일 + 로컬 커밋 3개, push 전): v1.4.11 기반.
+- **`sync/upstream-2026-09`** (worktree `../ghostty-sync`, push 전): upstream/main
+  `cc2f7ee4d`(2026-09-29) 위에 Wavetty 커밋을 다시 쌓은 브랜치. **최종 후보.**
+  - 5/14 이후 upstream 1,875커밋 반영.
+  - 포크 커밋 71개 중 진단/되돌리기 3쌍(9개, `src/` 순효과 0)은 제외하고 62개
+    적용 + 이번 작업 커밋.
+  - Zig 0.16 필요(upstream `minimum_zig_version`). `build-wavetty.sh`가
+    `zig@0.16`을 PATH에 고정.
 
-이번 세션 작업: **문서 최신화 + 코드 결함 3건 수정 + Dock 열린 창 표시 개선**.
-아래 "이번 세션 변경"은 아직 **커밋/빌드검증 전**일 수 있으니 확인할 것.
+## 이번 작업 (2026-09-30)
+1. **세션 히스토리 불일치 수정** — 최근 창 기록이 창을 "폴더 구성"으로 식별해
+   같은 폴더의 다른 창이 한 항목으로 합쳐지고, 복원 시 엉뚱한 창으로 포커스가
+   갔다. surface UUID 기반 식별로 교체(`WAVETTY.md` §4.4). macOS 상태 복원
+   경로의 스크롤백도 `com.mitchellh.ghostty` 하드코딩 → 번들 ID, 평문 → 컬러.
+2. **upstream 동기화** — 위 브랜치. 충돌 해결 원칙: upstream 구조 채택 + Wavetty
+   추가분 재적용. 주요 변화: `AppDelegate`가 `Sources/App/`으로 이동, iOS
+   `SurfaceView_UIKit.swift` 삭제, 종료 확인이 `terminate()`/`reviewWindows`로
+   분리(문자열만 리브랜딩), PTY 쓰기 버퍼가 `Write.buf`로 이동(4096 재적용).
+3. **Dock 열린 창 = 폴더명** — `WavettyWindowTitles`가 창 제목을 전체 창 기준
+   유일한 폴더명으로 지정(`KEA`, `MEDI/KEA`, `KEA ②`, `ssh nas`). §4.5.
 
-## 이번 세션 변경 (커밋 전)
-
-### 코드
-- `macos/Sources/Features/Sessions/SessionHistoryStore.swift`
-  - `restore(_:)`의 `restoringIDs.insert`를 `guard let primaryWindow` **뒤로 이동**.
-    이전에는 창 생성 실패 시 ID가 영구히 남아 그 항목의 복원과 모든 sweep이
-    앱 종료 시까지 막혔다.
-  - `scheduleShrinkReeval`의 생존 창 판정에 **`w.isVisible` 추가**. 닫혔지만 아직
-    해제되지 않은 NSWindow를 생존으로 오판하면 "창 전체 닫기"를 "탭 하나 닫기"로
-    처리해 기록이 잘린다.
-  - `windowWillClose`의 stale 주석(1.4.10의 "don't shrink" 설명)을 1.4.11의
-    지연 재평가 방식으로 갱신.
-- `macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift`
-  - `effectivePwd()` 추출 + `pwdDisplayPath()`(틸드 축약 경로) 추가.
-- `macos/Sources/Features/Terminal/BaseTerminalController.swift`
-  - **창 제목 = 작업 디렉토리 경로**(`~/AI/ghostty`). `wavettyTitleSurface`(weak)로
-    제목 소스 surface를 추적하고 `applyTitleToWindow`에서 pwd 우선 적용,
-    `pwdDidChange`에서 재적용. 사용자 title override > pwd > 셸 제목 순.
-  - **의도**: Dock 메뉴 최상단의 열린 창 목록은 AppKit이 `NSWindow.title`로
-    자동 생성하며 커스터마이즈 API가 없다. 제목 자체를 경로로 만드는 것이
-    그 목록을 Recent Windows 섹션과 같은 표기로 맞추는 유일한 방법.
-
-### 문서
-- `WAVETTY.md`: §3.1 Sessions 파일 목록, §3.3(Zig 코어 수정 금지 → **실제 예외
-  3곳 표로 명시**), §4.4 세션 복구 전체 신설, §4.5 pwd 창 제목 신설, §5.2
-  `--debug`, §8 파일 목록/기능 목록, §10 Keychain 항목 삭제(구현 완료), §12 읽기 순서
-- `RELEASING-WITHWAVE.md`: `--debug` 빌드 설명 추가
-- `HANDOFF.md`: 이 문서(v1.4.3 시점 내용 폐기 후 재작성)
+## 환경 변화 (중요)
+- Xcode 27 / macOS 27 SDK로 업데이트됨.
+  - Zig 0.15.2로는 lib-vt의 libcxx가 컴파일 안 됨(`INFINITY` 미정의) → **main은
+    더 이상 그대로 빌드 불가**. 동기화 브랜치(Zig 0.16)는 정상.
+  - Metal Toolchain이 빠져 있어 `xcodebuild -downloadComponent MetalToolchain`
+    으로 재설치함.
 
 ## 다음 할 일
-- [ ] `PATH="/opt/homebrew/opt/zig@0.15/bin:$PATH" zig build -Doptimize=ReleaseFast`
-      로 컴파일 확인 (기본 PATH의 zig는 0.16이라 build.zig에서 실패함)
-- [ ] `./scripts/build-wavetty.sh` → `/Applications/Wavetty.app` 설치 → 실행
-- [ ] 검증: Dock 아이콘 우클릭 → **상단 열린 창 목록이 `~/경로`로 표시**되는지
-- [ ] 검증: 탭 하나 닫기 → 기록 탭 수 감소 / 창 전체 닫기 → 전체 탭 보존·복원
-- [ ] 커밋 + `./scripts/release-wavetty.sh --bump 1.4.12-withwave` (릴리즈는 요청 시)
+- [ ] 동기화 브랜치 빌드(`zig-out/Wavetty.app`) 설치 후 사용자 테스트
+      (Dock 열린 창 이름, 같은 폴더 창 두 개 닫고 각각 복원 시 히스토리 일치)
+- [ ] 승인 후: main을 동기화 브랜치로 교체(`git branch -f main sync/...` 또는
+      reset) → `release-wavetty.sh --skip-rebase --bump 1.4.12-withwave`
+      (force-with-lease push 포함)
+- [ ] worktree 정리: `git worktree remove ../ghostty-sync`
 
-## 미해결 / 주의
-- **`collapseTabGrowth` 부작용**: 로드 시 "탭 시그니처가 다른 항목의 prefix"인
-  엔트리를 제거하므로, `~/a` 1탭 창과 `~/a + ~/b` 2탭 창을 함께 쓰면 1탭 항목이
-  재시작 때 사라진다. 의도된 정리이지만 사용자가 불편해하면 재검토 대상.
-- **탭 닫고 0.6초 내 앱 종료**하면 `scheduleShrinkReeval`이 못 돌아 닫은 탭이
-  기록에 남는다(경미).
-- **UI 자동화 제약**: 터미널에서 osascript/cliclick 접근성 권한이 막히면(-1719)
-  메뉴 자동 클릭 검증 불가 → 사용자 직접 클릭 필요.
-
-## 참고
-- 브랜딩은 100% `scripts/build-wavetty.sh` Step 2 후처리(plutil/sed). Xcode 소스는
-  전부 upstream 값이라 **디버그/일반 xcodebuild 빌드는 "Ghostty"로 뜨는 게 정상**.
-  리브랜딩된 디버그 빌드가 필요하면 `./scripts/build-wavetty.sh --debug`.
-- 세션 복구 상세 설명은 `WAVETTY.md` §4.4에 정리됨(캡처 시점, surface-UUID
-  스크롤백 키잉, 탭/창 닫기 구분, 복원 순서).
-- Zig 코어 신규 API: `ghostty_surface_dump_scrollback_styled`,
-  `ghostty_surface_write_styled_to_screen` (`src/apprt/embedded.zig`,
-  `include/ghostty.h`) + `src/termio/Exec.zig` write 버퍼 64→4096.
-  리베이스 시 유실되면 색상 스크롤백 복원이 깨진다.
-- Golden Rule: Wavetty 코드는 `macos/Sources/Features/` 하위에 격리,
-  upstream 파일 수정은 `// Wavetty:` 주석 + 최소 diff.
-- 빌드 제약: build.zig 패닉 방지 위해 HEAD가 버전 태그 커밋보다 앞서야 함.
+## 주의
+- `recent-windows.json`의 기존 항목은 surfaceID가 없어도 `.ansi` 파일명으로
+  식별되므로 마이그레이션 불필요. 폴더 기준 dedup이 없어져 같은 폴더의 항목이
+  여러 개 보일 수 있음(메뉴에 시각 표시로 구분).
+- 창 제목이 폴더명으로 고정되므로 셸/프로그램이 설정하는 제목(예: Claude Code의
+  작업 표시)은 탭에 보이지 않음. 필요하면 `prompt_tab_title`로 수동 지정.

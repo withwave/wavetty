@@ -71,12 +71,13 @@ Anything Wavetty-only lives in a new subdirectory of `macos/Sources/Features/`:
 | GitHub Release update checker | `macos/Sources/Features/Update/WavettyUpdateChecker.swift` |
 | SSH host management | `macos/Sources/Features/Hosts/` (SSHHostStore, SSHConfigParser, SSHURIParser, SSHHostMetadata, SSHHostManagerView, SSHMenuController, SSHProcessInspector, SSHKeychain, SSHAskpass) |
 | Recent-window session recovery | `macos/Sources/Features/Sessions/` (SessionHistoryStore, RecentWindowsMenuController) |
+| Folder-name window titles | `macos/Sources/Features/WindowTitles/WavettyWindowTitles.swift` |
 
 **Session recovery** (`SessionHistoryStore`): snapshots open terminal windows
-(tabs + split tree + frame) on a 15s timer, on window close, on resign-key, and
-at termination — so a closed window or a force-killed app can be reopened from
-the Dock menu with its layout and position restored. Entries are deduped by a
-frame-independent content signature and capped to 16 (LRU). SSH leaves are
+(tabs + split tree + frame + color scrollback) on window close, resign-key,
+child exit, and termination — so a closed window can be reopened from the Dock
+menu with its layout, position, and output restored. Entries are identified by
+session (surface ids), not folders, and capped to 16 (LRU); see §4.4. SSH leaves are
 detected live (foreground process via `ghostty_surface_pwd`/`KERN_PROCARGS2`) so
 they reconnect on restore. Persisted to `recent-windows.json`. Observes
 `NSWindow.willCloseNotification` etc. globally — **no upstream file edits**.
@@ -106,13 +107,12 @@ Current Wavetty edits in upstream files:
 
 | File | Wavetty change |
 |---|---|
-| `Sources/App/macOS/AppDelegate.swift` | `WavettyUpdateChecker.checkOnLaunch()` call; launch warmups (`SessionHistoryStore`, `SSHMenuController.install()`); `reloadDockMenu()` builds Recent Windows + SSH Hosts sections; `checkForUpdates(_:)` IBAction redirects; string rewrites ("Quit Ghostty?" → "Quit Wavetty?") |
+| `Sources/App/AppDelegate.swift` | `WavettyUpdateChecker.checkOnLaunch()` call; launch warmups (`SessionHistoryStore`, `SSHMenuController.install()`); `reloadDockMenu()` builds Recent Windows + SSH Hosts sections; `checkForUpdates(_:)` IBAction redirects; string rewrites ("Quit Ghostty?" → "Quit Wavetty?" in upstream's `terminate()`/`reviewWindows`) |
 | `Sources/Features/Command Palette/CommandPalette.swift` | Added optional `dynamicOptions:` parameter to `CommandPaletteView`; moved `hoveredOptionID` into `CommandTable` so hover during scroll doesn't re-evaluate the whole palette body (fixes severe scroll/click lag) |
 | `Sources/Features/Command Palette/TerminalCommandPalette.swift` | `sshDynamicOptions(query:)` method + one call site |
 | `Sources/Features/Terminal/BaseTerminalController.swift` | `lastComputedTitle` default `🌊`, fallback `titleDidChange(to: "🌊")`, bell prefix moved to suffix |
 | `Sources/Features/Terminal/Window Styles/TitlebarTabs{Tahoe,Ventura}TerminalWindow.swift` | default title `"🌊 Wavetty"` |
 | `Sources/Ghostty/Surface View/SurfaceView_AppKit.swift` | `self.title = "🌊"` fallback |
-| `Sources/Ghostty/Surface View/SurfaceView_UIKit.swift` | initial title `"🌊"` |
 | `Sources/Features/Terminal/Window Styles/*.xib` + `Sources/Features/QuickTerminal/QuickTerminal.xib` | `👻 Ghostty` → `🌊 Wavetty` in default window title |
 | `Sources/Features/Settings/SettingsView.swift` | unchanged (upstream placeholder) |
 
@@ -258,12 +258,19 @@ directory share one file, so restoring one tab showed the other's output.
 Files no longer referenced by a retained entry are pruned on every save
 (`cleanupOrphanScrollback`).
 
-**Dedup.** Entries are deduped by a frame-independent content signature
-(dirs / ssh aliases / split layout, in tab order). `windowEntryIDs` maps each
-live tab window to the entry it owns so gaining or losing a tab updates that
-one entry instead of appending a new one per tab count. At load,
-`collapseTabGrowth` drops entries whose tab signatures are a strict prefix of
-another's — historical "same folder, once per tab count" clutter.
+**Identity — sessions, not folders.** An entry is identified by the
+surfaces it was captured from (`SessionLeaf.surfaceID`; older entries fall back
+to the UUID in their `.ansi` file name), never by its folders. A live window is
+matched to its entry by, in order: the `windowEntryIDs` mapping (the same
+window across captures, or one `restore` just rebuilt and mapped); overlapping
+surface ids (a window macOS state restoration reopened at launch keeps its
+surface ids); otherwise it's a new entry. Two windows in the same folders are
+two entries — matching by folder signature (the pre-1.4.12 behavior) merged
+them, so one window's history was restored into another and restore focused
+the wrong window. The menus append the last-used time to entries that share a
+display name (`RecentWindow.menuTitles`). Tabs dragged out of a window into
+another leave their old entry absorbed; it's dropped once no live window maps
+to it.
 
 **Tab close vs. window close.** A closing multi-tab window drops its tabs one
 at a time, so both cases look identical at capture time: fewer tabs than the
@@ -273,14 +280,24 @@ live window still mapped to the entry means a single tab was closed (re-capture
 smaller, dropping the closed tab and its scrollback), no survivor means the
 whole window closed (keep the full entry so it restores with all tabs).
 
-**Restore.** `restore(_:)` focuses an already-open window with the same
-signature instead of duplicating it; otherwise it rebuilds tab 1 as the primary
+**Restore.** `restore(_:)` focuses the window currently mapped to the entry
+(this very session is still open) instead of duplicating it; otherwise it rebuilds tab 1 as the primary
 window, then attaches the remaining tabs (removing AppKit's own auto-tabbing
 first, exactly as `TerminalController.newTab` does — skipping that scatters the
 tabs into separate 1-tab windows). Scrollback injection and `ssh <alias>` start
 happen *after* each surface attaches (`processPendingRestores`), so nothing is
 echoed into the screen and re-captured. `restoringIDs` blocks re-entrant
-restores and suppresses captures until the tab group has settled.
+restores and suppresses captures until the tab group has settled *and* every
+restored surface's scrollback is injected — capturing earlier records empty
+screens and prunes the old scrollback files as orphans, losing the history.
+
+**macOS state restoration** (the system reopening windows after a crash or
+reboot) is a separate path in `SurfaceView_AppKit.swift` (`encode(to:)` /
+`restoreScrollback`): it saves `<bundleID>/scrollback/<uuid>.vt` (styled; the
+`.vt` extension keeps it out of the `.ansi` orphan pruning) and injects it with
+the same separator. It used to write plain text into a hardcoded
+`com.mitchellh.ghostty` folder shared with Ghostty; those legacy `.txt` files
+are still restored once.
 
 **UI.** Two entry points, both built in code (no xib edits): the Dock menu's
 *Recent Windows* section (`AppDelegate.reloadDockMenu`) and a *Recent Windows*
@@ -289,19 +306,27 @@ click a row to restore; hold ⌥ to swap the row to a delete (Finder-style
 `isAlternate` item). Removing an entry for a still-open window suppresses that
 window from re-capture until it closes.
 
-### 4.5 Window titles are working directories
+### 4.5 Window titles are folder names
 
-Upstream titles a window with whatever the shell sets. Wavetty overrides that
-in `BaseTerminalController.applyTitleToWindow`: the title is the focused
-surface's working directory, tilde-abbreviated (`~/AI/ghostty`), refreshed on
-`pwdDidChange`. A user title override (`prompt_tab_title`) still wins, and the
-shell title remains the fallback when no pwd is available.
+Upstream titles a window with whatever the shell sets. Wavetty titles it with
+its folder, unique across all open windows (`WavettyWindowTitles`, applied from
+`BaseTerminalController.applyTitleToWindow`):
+
+- `KEA` — the focused surface's folder name (`~` for home);
+- `MEDI/KEA` — parent folders are added while two different open folders
+  would share a label;
+- `KEA ②` — windows/tabs in the same folder are numbered in first-opened order;
+- `ssh nas` — surfaces tagged as SSH sessions.
+
+A user title override (`prompt_tab_title`) wins; the shell title is the
+fallback when no pwd is known. Titles re-compute on key-window changes, window
+close, `pwdDidChange`, and a 2 s poll (shells without OSC 7 give no `cd`
+event); windows are re-titled only when a name actually changes.
 
 The reason is the **Dock menu's open-window list**, which AppKit generates
-from `NSWindow.title` and which no API can customize — making the title the
-path is the only way to have that list identify windows the same way the
-Recent Windows section (§4.4) does. `SurfaceView.pwdDisplayPath()` /
-`pwdFolderName()` (in `SurfaceView_AppKit.swift`) provide the strings.
+from `NSWindow.title` and which no API can customize. Shell titles and even
+full paths don't tell windows apart there (several tabs in one folder look
+identical), hence the numbering.
 
 ---
 
@@ -513,21 +538,24 @@ macos/Sources/Features/Hosts/
 macos/Sources/Features/Sessions/
     SessionHistoryStore.swift                    # capture / restore / persistence
     RecentWindowsMenuController.swift            # File ▸ Recent Windows submenu
+
+macos/Sources/Features/WindowTitles/
+    WavettyWindowTitles.swift                    # unique folder-name window titles
+src/os/process.zig                               # foreground-process cwd (no OSC 7)
 ```
 
 ### Files modified in upstream (kept small)
 
 ```
-macos/Sources/App/macOS/AppDelegate.swift                         (~50 lines: dock menu sections, launch warmups)
+macos/Sources/App/AppDelegate.swift                               (~50 lines: dock menu sections, launch warmups)
 macos/Sources/Features/Command Palette/CommandPalette.swift        (~10 lines)
 macos/Sources/Features/Command Palette/TerminalCommandPalette.swift (~55 lines)
-macos/Sources/Features/Terminal/BaseTerminalController.swift       (~15 lines: pwd window title)
+macos/Sources/Features/Terminal/BaseTerminalController.swift       (~15 lines: folder-name window title)
 macos/Sources/Features/Terminal/Window Styles/Titlebar*.swift       (1 line each)
 macos/Sources/Features/Terminal/Window Styles/*.xib                 (1 string each)
 macos/Sources/Features/QuickTerminal/QuickTerminal.xib              (1 string)
 macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift        (~30 lines: pwd title helpers)
 macos/Sources/Ghostty/Surface View/OSSurfaceView.swift              (1 line: .wavettyChildExited post)
-macos/Sources/Ghostty/Surface View/SurfaceView_UIKit.swift          (1 line)
 macos/Sources/Features/App Intents/*.swift                          (small)
 macos/Sources/Features/Update/UpdatePopoverView.swift               (1 line)
 macos/Sources/Features/Command Palette/TerminalCommandPalette.swift (small)
