@@ -406,6 +406,12 @@ class BaseTerminalController: NSWindowController,
             alert.window.orderOut(nil)
             self.alert = nil
         }
+        // Wavetty: bring the window forward so the sheet can't go unnoticed
+        // (e.g. quit from the Dock while the window is on another display),
+        // which would leave the app waiting on it indefinitely.
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
         return await alert.beginSheetModal(for: window)
     }
 

@@ -318,7 +318,14 @@ its folder, unique across all open windows (`WavettyWindowTitles`, applied from
 - `KEA ②` — windows/tabs in the same folder are numbered in first-opened order;
 - `ssh nas` — surfaces tagged as SSH sessions.
 
-A user title override (`prompt_tab_title`) wins; the shell title is the
+The program's own title (OSC 0/2, kept apart from the folder/🌊 fallback as
+`SurfaceView.wavettyProgramTitle`) or a title the user set follows the label:
+`KEA — ✳ Claude Code`. It's omitted when it only repeats the folder (empty, 🌊,
+the folder name, or a prompt-style title ending in the folder's path such as
+`pss@mac: ~/KEA`). Session recovery stores the same title per leaf
+(`SessionLeaf.title`) so Recent Windows entries read `~/KEA — ✳ Claude Code`.
+
+A controller title override (`prompt_tab_title`) wins; the shell title is the
 fallback when no pwd is known. Titles re-compute on key-window changes, window
 close, `pwdDidChange`, and a 2 s poll (shells without OSC 7 give no `cd`
 event); windows are re-titled only when a name actually changes.
