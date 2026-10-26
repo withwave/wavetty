@@ -31,6 +31,9 @@ struct SessionLeaf: Codable, Equatable {
     /// — is what ties an entry to a window: two windows in the same folder are
     /// different sessions with different histories.
     var surfaceID: String?
+    /// The program's title at capture (e.g. `✳ Claude Code`), shown after the
+    /// folder in the menus like a live window's title.
+    var title: String?
 
     /// `surfaceID`, falling back to the scrollback file name for entries saved
     /// before the field existed (those files were already named by surface id).
@@ -95,7 +98,9 @@ struct RecentWindow: Codable, Equatable {
         default:
             base = "Terminal"
         }
-        return tabs.count > 1 ? "\(base)  (+\(tabs.count - 1) tabs)" : base
+        // Same "folder — title" form as live window titles.
+        let titled = tabs.first?.root.firstLeaf?.title.map { "\(base) — \($0)" } ?? base
+        return tabs.count > 1 ? "\(titled)  (+\(tabs.count - 1) tabs)" : titled
     }
 
     /// Whether the first leaf is an SSH session (for the menu icon).
@@ -395,6 +400,7 @@ final class SessionHistoryStore: ObservableObject {
         case .leaf(let view):
             var leaf = SessionLeaf()
             leaf.surfaceID = view.id.uuidString
+            leaf.title = WavettyWindowTitles.programTitle(of: view)
             // Prefer the alias tagged at session creation (survives ssh exit),
             // then fall back to live foreground-process inspection.
             if let alias = taggedSSHAliases[view.id] ?? sshAlias(of: view) {

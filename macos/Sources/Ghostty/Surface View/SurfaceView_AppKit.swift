@@ -238,6 +238,16 @@ extension Ghostty {
         // by the user, this is set to the prior value (which may be empty, but non-nil).
         private var titleFromTerminal: String?
 
+        /// Wavetty: the last title the terminal itself set (OSC 0/2), or nil.
+        /// Unlike `title`, never holds the folder-name/🌊 fallback.
+        private var wavettyProgramTitle: String?
+
+        /// Wavetty: the part shown after the folder in the window title — a
+        /// title the user set by hand, else the program's own title.
+        var wavettyTitleSuffix: String? {
+            titleFromTerminal != nil ? title : wavettyProgramTitle
+        }
+
         // The cached contents of the screen.
         private(set) var cachedScreenContents: CachedValue<String>
         private(set) var cachedVisibleContents: CachedValue<String>
@@ -652,6 +662,8 @@ extension Ghostty {
                 withTimeInterval: 0.075,
                 repeats: false
             ) { [weak self] _ in
+                // Wavetty: before `title` publishes, so window titles see it.
+                self?.wavettyProgramTitle = title.isEmpty ? nil : title
                 // Set the title if it wasn't manually set.
                 guard self?.titleFromTerminal == nil else {
                     self?.titleFromTerminal = title

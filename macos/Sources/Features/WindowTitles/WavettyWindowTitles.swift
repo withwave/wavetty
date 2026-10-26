@@ -13,7 +13,9 @@ import AppKit
 ///   the first-opened keeping the plain name;
 /// - `ssh nas` — for a session tagged as SSH.
 ///
-/// Windows without a known working directory keep their shell title.
+/// The program's own title follows the folder — `KEA — ✳ Claude Code` — unless
+/// it only repeats the folder (`pss@mac: ~/KEA`). Windows without a known
+/// working directory keep their shell title.
 @MainActor
 final class WavettyWindowTitles {
     static let shared = WavettyWindowTitles()
@@ -59,8 +61,33 @@ final class WavettyWindowTitles {
 
     /// The title for `controller`'s window, or nil to keep the shell's title.
     func title(for controller: BaseTerminalController) -> String? {
-        guard let window = controller.window, controller is TerminalController else { return nil }
-        return computeNames(including: window)[ObjectIdentifier(window)]
+        guard let window = controller.window, controller is TerminalController,
+              let label = computeNames(including: window)[ObjectIdentifier(window)] else { return nil }
+        guard let surface = controller.wavettyTitleSurface,
+              let suffix = Self.programTitle(of: surface, label: label) else { return label }
+        return "\(label) — \(suffix)"
+    }
+
+    /// The surface's program (or user-set) title, or nil when it adds nothing
+    /// beyond the folder. Also recorded by session recovery so the Recent
+    /// Windows menu reads the same way.
+    static func programTitle(of surface: Ghostty.SurfaceView, label: String? = nil) -> String? {
+        guard let suffix = surface.wavettyTitleSuffix?.trimmingCharacters(in: .whitespaces),
+              !isRedundant(suffix, label: label, dir: surface.effectivePwd()) else { return nil }
+        return suffix
+    }
+
+    /// Whether a program title adds nothing beyond the folder label: empty, the
+    /// emoji placeholder, the folder's name, or a prompt-style title ending in
+    /// the folder's path (`pss@mac: ~/KEA`).
+    private static func isRedundant(_ suffix: String, label: String?, dir: String?) -> Bool {
+        if suffix.isEmpty || suffix == "🌊" || suffix == label { return true }
+        guard let dir else { return false }
+        let std = (dir as NSString).standardizingPath
+        let abbreviated = (std as NSString).abbreviatingWithTildeInPath
+        return suffix == (std as NSString).lastPathComponent
+            || suffix.hasSuffix(abbreviated)
+            || suffix.hasSuffix(std)
     }
 
     private func refreshIfChanged() {
