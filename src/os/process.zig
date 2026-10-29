@@ -78,17 +78,15 @@ fn getCwdLinux(alloc: std.mem.Allocator, pid: posix.pid_t) ?[]u8 {
     return alloc.dupe(u8, path) catch null;
 }
 
+extern "c" fn tcgetpgrp(fd: posix.fd_t) posix.pid_t;
+
 /// Get the foreground process group ID for a given PTY master fd.
 /// This can be used to find the PID of the process the user is
 /// currently interacting with (e.g., after running `cd`).
 pub fn getForegroundPid(fd: posix.fd_t) ?posix.pid_t {
     if (comptime builtin.os.tag == .windows) return null;
 
-    const c = @cImport({
-        @cInclude("unistd.h");
-    });
-
-    const pgid = c.tcgetpgrp(fd);
+    const pgid = tcgetpgrp(fd);
     if (pgid < 0) return null;
     return pgid;
 }

@@ -134,7 +134,7 @@ typedef enum GHOSTTY_ENUM_TYPED {
   GHOSTTY_OSC_COMMAND_KITTY_TEXT_SIZING = 22,
   GHOSTTY_OSC_COMMAND_KITTY_CLIPBOARD_PROTOCOL = 23,
   GHOSTTY_OSC_COMMAND_KITTY_DND_PROTOCOL = 24,
-  GHOSTTY_OSC_COMMAND_CONTEXT_SIGNAL = 25,
+  GHOSTTY_OSC_COMMAND_HIERARCHICAL_CONTEXT = 25,
   GHOSTTY_OSC_COMMAND_KITTY_DESKTOP_NOTIFICATION = 26,
 
   /**
@@ -145,6 +145,16 @@ typedef enum GHOSTTY_ENUM_TYPED {
    * Otherwise these sequences are GHOSTTY_OSC_COMMAND_INVALID.
    */
   GHOSTTY_OSC_COMMAND_UNKNOWN = 27,
+
+  /**
+   * A program status report or support query (OSC 7501), which a program
+   * sends to say what it is doing, such as working or waiting on the user.
+   *
+   * The OSC parser only identifies this command. To receive the report's
+   * contents, use a terminal with GHOSTTY_TERMINAL_OPT_PROGRAM_STATUS
+   * instead (see GhosttyTerminalProgramStatus).
+   */
+  GHOSTTY_OSC_COMMAND_PROGRAM_STATUS = 28,
   GHOSTTY_OSC_COMMAND_TYPE_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
 } GhosttyOscCommandType;
 
@@ -262,7 +272,7 @@ typedef enum GHOSTTY_ENUM_TYPED {
  * Create a new OSC parser instance.
  * 
  * Creates a new OSC (Operating System Command) parser using the provided
- * allocator. The parser must be freed using ghostty_vt_osc_free() when
+ * allocator. The parser must be freed using ghostty_osc_free() when
  * no longer needed.
  * 
  * @param allocator Pointer to the allocator to use for memory management, or NULL to use the default allocator

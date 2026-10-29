@@ -344,8 +344,8 @@ identical), hence the numbering.
 - Apple Developer Program subscription ($99/year), Team ID `8AC9KUZJ5P`
 - Developer ID Application certificate in login keychain
 - `xcrun notarytool` profile registered as `modin-notary`
-- `brew install zig@0.16` (upstream's `minimum_zig_version`; the build script
-  pins it on PATH. Zig 0.15.2 can't compile lib-vt's libcxx on the macOS 27 SDK)
+- `brew install zig` — 0.17.x, upstream's `minimum_zig_version`; the build
+  script puts brew's zig first on PATH. (Zig 0.15.2 can't compile lib-vt's libcxx on the macOS 27 SDK.)
 - `xcodebuild -downloadComponent MetalToolchain` after Xcode updates
 - `gh auth login` for GitHub CLI
 

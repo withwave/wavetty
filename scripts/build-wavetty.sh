@@ -30,11 +30,11 @@ SIGNING_IDENTITY="Developer ID Application: MODIN COMPANY (8AC9KUZJ5P)"
 NOTARY_PROFILE="modin-notary"
 ENTITLEMENTS="macos/GhosttyReleaseLocal.entitlements"
 GITHUB_REPO="withwave/wavetty"
-RELEASE_TAG="v1.4.11-withwave"
+RELEASE_TAG="v${VERSION}"
 
-# Upstream requires Zig 0.16 (build.zig.zon minimum_zig_version). Pin brew's
-# zig@0.16 so a different default `zig` on PATH can't break the build.
-export PATH="/opt/homebrew/opt/zig@0.16/bin:$PATH"
+# Upstream requires Zig 0.17 (build.zig.zon minimum_zig_version). Put brew's
+# zig first so a different `zig` elsewhere on PATH can't break the build.
+export PATH="/opt/homebrew/opt/zig/bin:$PATH"
 
 # ---------------------------------------------------------------------------
 # Args
